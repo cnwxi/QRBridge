@@ -8,6 +8,43 @@
     <script src="js/pako.min.js"></script>
     <script src="js/localforage.min.js"></script>
     <script src="js/index.min.js"></script>
+    <!-- 内联 Base45 实现 -->
+    <script>
+        (function(global) {
+            const alphabet = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ $%*+-./:';
+            function encode(input) {
+                if (typeof input === 'string') input = new TextEncoder().encode(input);
+                let result = [];
+                for (let i = 0; i < input.length; i += 2) {
+                    let val = input[i];
+                    if (i + 1 < input.length) val = val + input[i+1] * 256;
+                    let c1 = Math.floor(val / 45);
+                    let c2 = val % 45;
+                    result.push(alphabet[c1 % 45], alphabet[Math.floor(c1 / 45)]);
+                    if (i + 1 < input.length) result.push(alphabet[c2]);
+                    else result.push(alphabet[val % 45]);
+                }
+                return result.join('');
+            }
+            function decode(input) {
+                const numbers = [];
+                for (let i = 0; i < input.length; i++) {
+                    const idx = alphabet.indexOf(input[i]);
+                    if (idx === -1) throw new Error(`Invalid Base45 char: ${input[i]}`);
+                    numbers.push(idx);
+                }
+                const result = [];
+                for (let i = 0; i < numbers.length; i += 3) {
+                    let val = numbers[i] + numbers[i+1] * 45;
+                    if (i+2 < numbers.length) val += numbers[i+2] * 45 * 45;
+                    result.push(val % 256);
+                    if (val > 255) result.push(Math.floor(val / 256));
+                }
+                return new Uint8Array(result);
+            }
+            global.base45 = { encode, decode };
+        })(window);
+    </script>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
@@ -17,13 +54,12 @@
             min-height: 100vh;
             -webkit-font-smoothing: antialiased;
         }
-        .app-container { max-width: 100%; margin: 0 auto; padding: 0 15px; }
+        .app-container { max-width: 500px; margin: 0 auto; padding: 0 15px; }
         .header { text-align: center; padding: 20px 0; }
         .logo { font-size: 48px; margin-bottom: 10px; }
         h1 { font-size: 24px; margin-bottom: 5px; }
-        .subtitle { font-size: 14px; opacity: 0.9; }
         .card {
-            background: rgba(255, 255, 255, 0.95);
+            background: rgba(255,255,255,0.95);
             border-radius: 15px;
             padding: 20px;
             margin-bottom: 20px;
@@ -48,36 +84,29 @@
         .btn-primary:hover { background: #2980b9; transform: translateY(-2px); }
         .btn-danger { background: #e74c3c; color: white; }
         .btn-danger:hover { background: #c0392b; transform: translateY(-2px); }
-        .btn-success { background: #2ecc71; color: white; }
-        .btn-success:hover { background: #27ae60; transform: translateY(-2px); }
         .btn:disabled { background: #bdc3c7; cursor: not-allowed; transform: none; }
-        
         .scan-section { display: none; position: relative; margin-bottom: 20px; border-radius: 15px; overflow: hidden; }
         .scan-section.active { display: block; }
         .scan-window { width: 100%; background: #000; position: relative; padding-top: 100%; }
-        .video-container { position: absolute; top: 0; left: 0; width: 100%; height: 100%; overflow: hidden; background: #000; }
-        #videoElement { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 100%; height: 100%; object-fit: cover; background: #000; }
+        .video-container { position: absolute; top: 0; left: 0; width: 100%; height: 100%; overflow: hidden; }
+        #videoElement { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 100%; height: 100%; object-fit: cover; }
         .scan-overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 2; }
         .scan-frame {
             position: absolute;
-            top: 50%;
-            left: 50%;
+            top: 50%; left: 50%;
             transform: translate(-50%, -50%);
-            width: 70%;
-            height: 70%;
+            width: 70%; height: 70%;
             border: 3px solid #3498db;
             border-radius: 10px;
-            box-shadow: 0 0 0 1000px rgba(0, 0, 0, 0.6);
+            box-shadow: 0 0 0 1000px rgba(0,0,0,0.6);
             animation: scan-pulse 2s infinite;
         }
         @keyframes scan-pulse { 0% { border-color: #3498db; } 50% { border-color: #2ecc71; } 100% { border-color: #3498db; } }
         .scan-success .scan-frame { border-color: #2ecc71 !important; box-shadow: 0 0 0 1000px rgba(0,0,0,0.6), 0 0 20px rgba(46,204,113,0.5) !important; animation: none; }
         .scan-close-btn {
             position: absolute;
-            top: 15px;
-            right: 15px;
-            width: 40px;
-            height: 40px;
+            top: 15px; right: 15px;
+            width: 40px; height: 40px;
             background: rgba(231,76,60,0.9);
             border: 2px solid white;
             border-radius: 50%;
@@ -89,13 +118,10 @@
             align-items: center;
             justify-content: center;
         }
-        .scan-close-btn:hover { background: rgba(192,57,43,0.9); transform: scale(1.1); }
-        .scan-tips { background: rgba(52,152,219,0.9); color: white; text-align: center; padding: 10px 15px; border-radius: 0 0 15px 15px; }
-        .scan-tips p { margin: 3px 0; font-size: 14px; }
+        .scan-tips { background: rgba(52,152,219,0.9); color: white; text-align: center; padding: 10px; border-radius: 0 0 15px 15px; }
         .floating-message {
             position: fixed;
-            top: 50%;
-            left: 50%;
+            top: 50%; left: 50%;
             transform: translate(-50%, -50%);
             background: rgba(46,204,113,0.95);
             color: white;
@@ -106,10 +132,6 @@
             z-index: 10000;
             box-shadow: 0 10px 30px rgba(46,204,113,0.5);
             animation: floatUp 1.5s ease forwards;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            max-width: 80%;
             text-align: center;
             backdrop-filter: blur(10px);
         }
@@ -119,7 +141,7 @@
             80% { opacity: 1; transform: translate(-50%, -50%); }
             100% { opacity: 0; transform: translate(-50%, -70%); }
         }
-        .floating-error { background: rgba(231,76,60,0.95); box-shadow: 0 10px 30px rgba(231,76,60,0.5); }
+        .floating-error { background: rgba(231,76,60,0.95); }
         .status-message { padding: 12px; border-radius: 8px; margin: 15px 0; text-align: center; }
         .status-success { background: #d4edda; color: #155724; }
         .status-error { background: #f8d7da; color: #721c24; }
@@ -133,500 +155,388 @@
         .action-buttons .btn { flex: 1; }
         .hidden { display: none !important; }
         .camera-selector { margin: 10px 0; padding: 10px; border-radius: 8px; border: 1px solid #ddd; width: 100%; background: white; }
-        .manual-input-section textarea { width: 100%; height: 100px; padding: 10px; border-radius: 8px; border: 1px solid #ddd; font-family: 'Courier New', monospace; margin-bottom: 10px; resize: vertical; background: #f8f9fa; }
+        .manual-input-section textarea { width: 100%; height: 100px; padding: 10px; border-radius: 8px; border: 1px solid #ddd; font-family: monospace; margin-bottom: 10px; resize: vertical; }
         .footer { text-align: center; margin: 20px; padding-top: 20px; border-top: 1px solid rgba(255,255,255,0.2); color: rgba(255,255,255,0.8); font-size: 13px; }
         .chunks-grid { display: flex; flex-wrap: wrap; gap: 5px; justify-content: center; margin-top: 15px; }
-        .chunk-item { width: 35px; height: 35px; border-radius: 6px; display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 13px; transition: all 0.3s; }
-        .chunk-received { background: linear-gradient(135deg, #2ecc71, #27ae60); color: white; box-shadow: 0 2px 4px rgba(46,204,113,0.3); animation: chunk-pop 0.3s ease; }
-        @keyframes chunk-pop { 0% { transform: scale(0.8); } 70% { transform: scale(1.1); } 100% { transform: scale(1); } }
+        .chunk-item { width: 35px; height: 35px; border-radius: 6px; display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 13px; }
+        .chunk-received { background: linear-gradient(135deg, #2ecc71, #27ae60); color: white; animation: chunk-pop 0.3s ease; }
+        @keyframes chunk-pop { 0% { transform: scale(0.8); } 100% { transform: scale(1); } }
         .chunk-missing { background: #ecf0f1; color: #7f8c8d; }
-        .chunk-filename { background: linear-gradient(135deg, #ff9800, #ff5722); color: white; box-shadow: 0 2px 4px rgba(255,152,0,0.3); }
-        .fingerprint-display { padding: 8px 12px; background: linear-gradient(135deg, #e8f4fc, #d6eaf8); border-radius: 6px; margin: 10px 0; font-family: 'Courier New', monospace; font-size: 14px; text-align: center; border: 1px solid #3498db; }
-        @media (max-width: 480px) { .chunk-item { width: 30px; height: 30px; font-size: 12px; } .btn { padding: 12px; font-size: 15px; } }
-        @media (min-width: 768px) { .app-container { max-width: 500px; margin: 0 auto; } }
+        .chunk-filename { background: linear-gradient(135deg, #1a5276, #2c3e50); color: white; }
+        .fingerprint-display { padding: 8px 12px; background: linear-gradient(135deg, #e8f4fc, #d6eaf8); border-radius: 6px; margin: 10px 0; font-family: monospace; font-size: 14px; text-align: center; border: 1px solid #3498db; }
+        @media (max-width: 480px) { .chunk-item { width: 30px; height: 30px; font-size: 12px; } }
     </style>
 </head>
 <body>
-    <div class="app-container">
-        <div class="header">
-            <div class="logo">📱</div>
-            <h1>二维码文件接收器 - V2.0</h1>
-            <p class="subtitle">支持断点续传 | 修复Base64解码错误</p>
+<div class="app-container">
+    <div class="header"><div class="logo">📱</div><h1>二维码文件接收器</h1><p class="subtitle">自动重组 | 断点续传</p></div>
+    <div id="floatingContainer"></div>
+    <div id="scanSection" class="scan-section">
+        <div class="scan-window">
+            <button id="closeScanBtn" class="scan-close-btn">×</button>
+            <div class="video-container"><video id="videoElement" playsinline></video><div class="scan-overlay"><div class="scan-frame"></div></div></div>
         </div>
-        <div id="floatingContainer"></div>
-        <div id="scanSection" class="scan-section">
-            <div class="scan-window">
-                <button id="closeScanBtn" class="scan-close-btn">×</button>
-                <div class="video-container">
-                    <video id="videoElement" playsinline></video>
-                    <div class="scan-overlay">
-                        <div class="scan-frame"></div>
-                    </div>
-                </div>
-            </div>
-            <div class="scan-tips">
-                <p>正方形扫描窗口 | ZXing 0.21.3</p>
-                <p>先扫描数据二维码，最后扫描文件名二维码</p>
-            </div>
-        </div>
-
-        <div class="card">
-            <div class="section-title">📷 1. 扫描设置</div>
-            <select id="cameraSelect" class="camera-selector"><option value="">选择摄像头...</option></select>
-            <button id="startScanBtn" class="btn btn-primary">
-                <span id="scanBtnText">🚀 开始扫描二维码</span>
-                <div id="scanStatus" class="focus-status">准备就绪</div>
-            </button>
-            <div class="manual-input-section">
-                <p style="color: #666; margin: 15px 0 10px; font-size: 14px;">备用方案：手动输入</p>
-                <textarea id="manualData" placeholder='粘贴二维码内容，例如：{"i":0,"t":5,"f":"abc12","h":"xyz89","d":"..."} 或 {"t":"fn","f":"abc12","n":"JUU5JTlGJUE5JUU4JUE2JTgxJUU1JThGJUIwJUU5JTgxJTk1JUU5JTlBJUIxJUU3JTg5JTg4LnR4dA==","s":1024}'></textarea>
-                <button id="submitManualBtn" class="btn btn-primary">✅ 提交数据</button>
-            </div>
-        </div>
-
-        <div class="card">
-            <div class="section-title">📊 2. 接收进度</div>
-            <div id="currentFingerprint" class="fingerprint-display" style="display: none;">
-                <strong>当前文件指纹:</strong> <span id="fingerprintValue">未设置</span>
-            </div>
-            <div id="status" class="status-message status-info">等待扫描第一个二维码...</div>
-            <div class="progress-section">
-                <div class="progress-info"><span>进度: <span id="receivedCount">0</span>/<span id="totalCount">0</span></span><span id="percentage">0%</span></div>
-                <div class="progress-bar"><div id="progressFill" class="progress-fill"></div></div>
-            </div>
-            <div id="chunksDisplay" class="chunks-grid"></div>
-        </div>
-
-        <div class="card">
-            <div class="section-title">💾 3. 文件信息</div>
-            <div id="fileInfo" class="file-info">
-                <p><strong>文件名:</strong> <span id="fileName">未知</span></p>
-                <p><strong>文件大小:</strong> <span id="fileSize">未知</span></p>
-                <p><strong>文件类型:</strong> <span id="fileType">未知</span></p>
-                <p><strong>接收时间:</strong> <span id="receiveTime">未知</span></p>
-                <p><strong>总数据分片:</strong> <span id="dataChunksCount">0</span></p>
-            </div>
-            <div class="action-buttons">
-                <button id="assembleBtn" class="btn btn-success" disabled><span id="assembleBtnText">🛠️ 重组文件</span></button>
-                <button id="clearBtn" class="btn btn-danger">🗑️ 清除数据</button>
-            </div>
-            <div id="downloadSection" class="hidden" style="margin-top: 15px;"><button id="downloadBtn" class="btn btn-primary">⬇️ 下载文件</button></div>
-        </div>
-        <div class="footer"><p>💡 提醒：文件名在最后一个单独的二维码中</p><p>V2.0 修复了Base64解码错误，兼容新旧版本</p></div>
+        <div class="scan-tips"><p>对准二维码 | 自动识别</p><p>先数据分片，最后文件名分片</p></div>
     </div>
+    <div class="card">
+        <div class="section-title">📷 1. 扫描设置</div>
+        <select id="cameraSelect" class="camera-selector"><option value="">选择摄像头...</option></select>
+        <button id="startScanBtn" class="btn btn-primary"><span id="scanBtnText">🚀 开始扫描</span><div id="scanStatus" style="font-size:12px;">就绪</div></button>
+        <div class="manual-input-section"><p style="margin:15px 0 10px;">备用：手动输入JSON</p><textarea id="manualData" placeholder='{"i":0,"t":5,"f":"abc12","h":"xyz89","d":"..."}'></textarea><button id="submitManualBtn" class="btn btn-primary">✅ 提交</button></div>
+    </div>
+    <div class="card">
+        <div class="section-title">📊 2. 接收进度</div>
+        <div id="currentFingerprint" class="fingerprint-display" style="display:none;"><strong>文件指纹:</strong> <span id="fingerprintValue">未设置</span></div>
+        <div id="status" class="status-message status-info">等待扫描</div>
+        <div class="progress-section"><div class="progress-info"><span>进度: <span id="receivedCount">0</span>/<span id="totalCount">0</span></span><span id="percentage">0%</span></div><div class="progress-bar"><div id="progressFill" class="progress-fill"></div></div></div>
+        <div id="chunksDisplay" class="chunks-grid"></div>
+    </div>
+    <div class="card">
+        <div class="section-title">💾 3. 文件信息</div>
+        <div id="fileInfo" class="file-info">
+            <p><strong>文件名:</strong> <span id="fileName">未知</span></p><p><strong>大小:</strong> <span id="fileSize">未知</span></p><p><strong>类型:</strong> <span id="fileType">未知</span></p><p><strong>接收时间:</strong> <span id="receiveTime">未知</span></p><p><strong>数据分片:</strong> <span id="dataChunksCount">0</span></p>
+        </div>
+        <div class="action-buttons"><button id="clearBtn" class="btn btn-danger">🗑️ 清除数据</button></div>
+        <div id="downloadSection" class="hidden" style="margin-top:15px;"><button id="downloadBtn" class="btn btn-primary">⬇️ 下载文件</button></div>
+    </div>
+    <div class="footer"><p>扫描完成后自动重组 | 支持断点续传</p><p>Base45 高效编码</p></div>
+</div>
+<script>
+    let receivedDataChunks = new Map();
+    let fileNameData = null;
+    let totalDataChunks = 0;
+    let currentFileFingerprint = null;
+    let isProcessing = false;
+    let receivedFileName = '';
+    let receivedFileSize = 0;
+    let isScanning = false;
+    let codeReader = null;
+    let scanControls = null;
+    let lastDecodedText = '';
+    let lastScanTime = 0;
+    let base45 = window.base45;
 
-    <script>
-        let receivedDataChunks = new Map();
-        let fileNameData = null;
-        let totalDataChunks = 0;
-        let currentFileFingerprint = null;
-        let isProcessing = false;
-        let receivedFileName = '';
-        let receivedFileSize = 0;
-        let isScanning = false;
-        let codeReader = null;
-        let scanControls = null;
-        let lastDecodedText = '';
-        let lastScanTime = 0;
+    function calculateCRC32(data) {
+        if (typeof pako !== 'undefined' && pako.crc32) return pako.crc32(data).toString(36).padStart(5,'0').slice(-5);
+        // fallback
+        const table = new Uint32Array(256);
+        for(let i=0;i<256;i++){let c=i;for(let j=0;j<8;j++)c=(c&1)?0xEDB88320^(c>>>1):c>>>1;table[i]=c;}
+        let crc=0xFFFFFFFF;
+        for(let i=0;i<data.length;i++) crc = (crc>>>8) ^ table[(crc ^ data.charCodeAt(i)) & 0xFF];
+        crc = (crc ^ 0xFFFFFFFF) >>> 0;
+        return crc.toString(36).padStart(5,'0').slice(-5);
+    }
+    function decodeFileName(base64Name){
+        try{
+            const binaryStr = atob(base64Name);
+            const bytes = new Uint8Array(binaryStr.length);
+            for(let i=0;i<binaryStr.length;i++) bytes[i]=binaryStr.charCodeAt(i);
+            return new TextDecoder('utf-8').decode(bytes);
+        }catch(e){
+            try{ return decodeURIComponent(escape(atob(base64Name))); }catch(e2){ return base64Name; }
+        }
+    }
+    const videoElement = document.getElementById('videoElement');
+    const cameraSelect = document.getElementById('cameraSelect');
+    const startScanBtn = document.getElementById('startScanBtn');
+    const scanBtnText = document.getElementById('scanBtnText');
+    const scanStatus = document.getElementById('scanStatus');
+    const scanSection = document.getElementById('scanSection');
+    const closeScanBtn = document.getElementById('closeScanBtn');
+    const statusDiv = document.getElementById('status');
+    const receivedCountSpan = document.getElementById('receivedCount');
+    const totalCountSpan = document.getElementById('totalCount');
+    const percentageSpan = document.getElementById('percentage');
+    const progressFill = document.getElementById('progressFill');
+    const chunksDisplay = document.getElementById('chunksDisplay');
+    const fileInfoDiv = document.getElementById('fileInfo');
+    const fileNameSpan = document.getElementById('fileName');
+    const fileSizeSpan = document.getElementById('fileSize');
+    const fileTypeSpan = document.getElementById('fileType');
+    const receiveTimeSpan = document.getElementById('receiveTime');
+    const dataChunksCountSpan = document.getElementById('dataChunksCount');
+    const clearBtn = document.getElementById('clearBtn');
+    const downloadSection = document.getElementById('downloadSection');
+    const downloadBtn = document.getElementById('downloadBtn');
+    const manualData = document.getElementById('manualData');
+    const submitManualBtn = document.getElementById('submitManualBtn');
+    const floatingContainer = document.getElementById('floatingContainer');
+    const currentFingerprintDiv = document.getElementById('currentFingerprint');
+    const fingerprintValueSpan = document.getElementById('fingerprintValue');
+    const { BrowserQRCodeReader } = ZXing;
 
-        function calculateCRC32(data) {
-            if (typeof pako !== 'undefined' && pako.crc32) {
-                return pako.crc32(data).toString(36).padStart(5, '0').slice(-5);
+    function showFloatingMessage(msg, isError=false){
+        const div = document.createElement('div');
+        div.className = `floating-message ${isError ? 'floating-error' : ''}`;
+        div.textContent = msg;
+        floatingContainer.appendChild(div);
+        setTimeout(()=>div.parentNode?.removeChild(div),1500);
+    }
+    function showStatus(msg, type){
+        statusDiv.textContent = msg;
+        statusDiv.className = 'status-message';
+        if(type==='success') statusDiv.classList.add('status-success');
+        else if(type==='error') statusDiv.classList.add('status-error');
+        else statusDiv.classList.add('status-info');
+    }
+
+    document.addEventListener('DOMContentLoaded', async()=>{
+        console.log('Receiver loaded');
+        if(typeof ZXing==='undefined' || !BrowserQRCodeReader) showStatus('ZXing库加载失败','error');
+        await initCameraList();
+        await loadSavedChunks();
+        updateUI();
+    });
+
+    async function initCameraList(){
+        try{
+            let devices = [];
+            try{ devices = await BrowserQRCodeReader.listVideoInputDevices(); }
+            catch(e){ const native = await navigator.mediaDevices.enumerateDevices(); devices = native.filter(d=>d.kind==='videoinput'); }
+            cameraSelect.innerHTML = '<option value="">选择摄像头...</option>';
+            devices.forEach((d,idx)=>{ let opt = document.createElement('option'); opt.value = d.deviceId; opt.text = d.label || `摄像头 ${idx+1}`; cameraSelect.appendChild(opt); });
+            if(devices.length===0) scanStatus.textContent = '未找到摄像头';
+            else scanStatus.textContent = `找到 ${devices.length} 个摄像头`;
+        }catch(err){ console.error(err); scanStatus.textContent = '摄像头检测失败'; }
+    }
+
+    startScanBtn.addEventListener('click', async()=>{
+        if(isProcessing) return;
+        if(isScanning){ await stopScanning(); return; }
+        isProcessing=true;
+        try{
+            startScanBtn.disabled=true;
+            scanBtnText.textContent = '⏳ 启动...';
+            scanSection.classList.add('active');
+            const deviceId = cameraSelect.value || undefined;
+            codeReader = new BrowserQRCodeReader({ tryHarder: true, formats: [ZXing.BarcodeFormat.QR_CODE] });
+            scanControls = await codeReader.decodeFromVideoDevice(deviceId, videoElement, (result, error, controls)=>{
+                if(result) handleScanResult(result.getText());
+                if(error && !error.message?.includes('NotFound') && !error.message?.includes('No QR')) console.log(error);
+                if(controls && !scanControls) scanControls = controls;
+            });
+            isScanning=true;
+            startScanBtn.disabled=false;
+            scanBtnText.textContent = '⏹️ 停止扫描';
+            scanStatus.textContent = '扫描中...';
+            showStatus('扫描已启动','success');
+        }catch(err){
+            console.error(err);
+            if(err.name==='NotAllowedError') showStatus('请允许摄像头权限','error');
+            else showStatus('启动失败: '+err.message,'error');
+            await stopScanning();
+            startScanBtn.disabled=false;
+            scanBtnText.textContent = '🚀 开始扫描';
+        } finally { isProcessing=false; }
+    });
+
+    function handleScanResult(decodedText){
+        const now = Date.now();
+        if(now-lastScanTime < 1000 && decodedText===lastDecodedText) return;
+        lastScanTime=now; lastDecodedText=decodedText;
+        scanSection.classList.add('scan-success');
+        setTimeout(()=>scanSection.classList.remove('scan-success'),300);
+        processChunkData(decodedText);
+    }
+
+    async function stopScanning(){
+        isScanning=false;
+        if(scanControls?.stop) scanControls.stop();
+        if(codeReader?.reset) codeReader.reset();
+        if(videoElement.srcObject){
+            videoElement.srcObject.getTracks().forEach(t=>t.stop());
+            videoElement.srcObject=null;
+        }
+        scanControls=null; codeReader=null;
+        scanSection.classList.remove('active');
+        scanBtnText.textContent = '🚀 开始扫描';
+        startScanBtn.disabled=false;
+        showStatus('扫描已停止','info');
+    }
+    closeScanBtn.addEventListener('click', stopScanning);
+
+    async function processChunkData(data){
+        try{
+            let trimmed = data.trim();
+            if(!trimmed.startsWith('{') && trimmed.includes('{')) trimmed = trimmed.substring(trimmed.indexOf('{'));
+            if(!trimmed.endsWith('}') && trimmed.includes('}')) trimmed = trimmed.substring(0, trimmed.lastIndexOf('}')+1);
+            if(!trimmed.startsWith('{') || !trimmed.endsWith('}')) throw new Error('无效JSON');
+            const chunk = JSON.parse(trimmed);
+            if(chunk.t === 'fn'){
+                // 文件名分片
+                if(typeof chunk.f !== 'string' || typeof chunk.n !== 'string' || typeof chunk.s !== 'number' || typeof chunk.h !== 'string') throw new Error('文件名格式错误');
+                const crcData = { t: chunk.t, f: chunk.f, n: chunk.n, s: chunk.s, ts: chunk.ts, tc: chunk.tc };
+                const calcHash = calculateCRC32(JSON.stringify(crcData));
+                if(calcHash !== chunk.h.toLowerCase()){ showFloatingMessage('文件名校验失败',true); return; }
+                if(currentFileFingerprint && chunk.f !== currentFileFingerprint){ showFloatingMessage('文件指纹不匹配',true); return; }
+                fileNameData = chunk;
+                receivedFileName = decodeFileName(chunk.n);
+                if(!currentFileFingerprint){ currentFileFingerprint = chunk.f; fingerprintValueSpan.textContent = currentFileFingerprint; currentFingerprintDiv.style.display = 'block'; }
+                totalDataChunks = chunk.tc || 0;
+                receivedFileSize = chunk.s;
+                const store = localforage.createInstance({ name: 'qrcode-filename-separate' });
+                await store.setItem('fileNameData', fileNameData);
+                await store.setItem('fileName', receivedFileName);
+                await store.setItem('fileSize', receivedFileSize);
+                await store.setItem('totalDataChunks', totalDataChunks);
+                await store.setItem('receiveTime', new Date().toISOString());
+                receiveTimeSpan.textContent = new Date().toLocaleString();
+                showFloatingMessage('📄 文件名分片接收成功');
+                showStatus(`文件名: ${receivedFileName}`, 'success');
+            } else {
+                // 数据分片
+                if(typeof chunk.i !== 'number' || typeof chunk.t !== 'number' || typeof chunk.h !== 'string' || typeof chunk.d !== 'string' || typeof chunk.f !== 'string') throw new Error('数据分片格式错误');
+                if(!currentFileFingerprint){ currentFileFingerprint = chunk.f; fingerprintValueSpan.textContent = currentFileFingerprint; currentFingerprintDiv.style.display = 'block'; }
+                else if(chunk.f !== currentFileFingerprint){ showFloatingMessage('二维码不属于当前文件',true); return; }
+                const calcHash = calculateCRC32(chunk.d);
+                if(calcHash !== chunk.h.toLowerCase()){ showFloatingMessage(`分片 ${chunk.i+1} 校验失败`,true); return; }
+                if(receivedDataChunks.has(chunk.i)){ showFloatingMessage(`分片 ${chunk.i+1} 已存在`); return; }
+                if(totalDataChunks === 0) totalDataChunks = chunk.t;
+                receivedDataChunks.set(chunk.i, chunk);
+                const store = localforage.createInstance({ name: 'qrcode-filename-separate' });
+                await store.setItem(`dataChunk_${chunk.i}`, chunk);
+                showFloatingMessage(`✅ 数据分片 ${chunk.i+1}/${chunk.t}`);
             }
-            return calculateCRC32Fallback(data);
-        }
-
-        function calculateCRC32Fallback(data) {
-            const table = new Uint32Array(256);
-            for (let i = 0; i < 256; i++) {
-                let c = i;
-                for (let j = 0; j < 8; j++) c = (c & 1) ? 0xEDB88320 ^ (c >>> 1) : c >>> 1;
-                table[i] = c;
-            }
-            let crc = 0xFFFFFFFF;
-            for (let i = 0; i < data.length; i++) crc = (crc >>> 8) ^ table[(crc ^ data.charCodeAt(i)) & 0xFF];
-            crc = (crc ^ 0xFFFFFFFF) >>> 0;
-            return crc.toString(36).padStart(5, '0').slice(-5);
-        }
-
-        function decodeFileName(base64Name) {
-            try {
-                const binaryStr = atob(base64Name);
-                const bytes = new Uint8Array(binaryStr.length);
-                for (let i = 0; i < binaryStr.length; i++) bytes[i] = binaryStr.charCodeAt(i);
-                return new TextDecoder('utf-8').decode(bytes);
-            } catch (e) {
-                try { return decodeURIComponent(escape(atob(base64Name))); } catch(e2) { return base64Name; }
-            }
-        }
-
-        const videoElement = document.getElementById('videoElement');
-        const cameraSelect = document.getElementById('cameraSelect');
-        const startScanBtn = document.getElementById('startScanBtn');
-        const scanBtnText = document.getElementById('scanBtnText');
-        const scanStatus = document.getElementById('scanStatus');
-        const scanSection = document.getElementById('scanSection');
-        const closeScanBtn = document.getElementById('closeScanBtn');
-        const statusDiv = document.getElementById('status');
-        const receivedCountSpan = document.getElementById('receivedCount');
-        const totalCountSpan = document.getElementById('totalCount');
-        const percentageSpan = document.getElementById('percentage');
-        const progressFill = document.getElementById('progressFill');
-        const chunksDisplay = document.getElementById('chunksDisplay');
-        const fileInfoDiv = document.getElementById('fileInfo');
-        const fileNameSpan = document.getElementById('fileName');
-        const fileSizeSpan = document.getElementById('fileSize');
-        const fileTypeSpan = document.getElementById('fileType');
-        const receiveTimeSpan = document.getElementById('receiveTime');
-        const dataChunksCountSpan = document.getElementById('dataChunksCount');
-        const assembleBtn = document.getElementById('assembleBtn');
-        const assembleBtnText = document.getElementById('assembleBtnText');
-        const clearBtn = document.getElementById('clearBtn');
-        const downloadSection = document.getElementById('downloadSection');
-        const downloadBtn = document.getElementById('downloadBtn');
-        const manualData = document.getElementById('manualData');
-        const submitManualBtn = document.getElementById('submitManualBtn');
-        const floatingContainer = document.getElementById('floatingContainer');
-        const currentFingerprintDiv = document.getElementById('currentFingerprint');
-        const fingerprintValueSpan = document.getElementById('fingerprintValue');
-        const { BrowserQRCodeReader } = ZXing;
-
-        function showFloatingMessage(message, isError = false) {
-            const div = document.createElement('div');
-            div.className = `floating-message ${isError ? 'floating-error' : ''}`;
-            div.textContent = message;
-            floatingContainer.appendChild(div);
-            setTimeout(() => div.parentNode?.removeChild(div), 1500);
-        }
-
-        function showStatus(message, type) {
-            statusDiv.textContent = message;
-            statusDiv.className = 'status-message';
-            if (type === 'success') statusDiv.classList.add('status-success');
-            else if (type === 'error') statusDiv.classList.add('status-error');
-            else statusDiv.classList.add('status-info');
-        }
-
-        document.addEventListener('DOMContentLoaded', async () => {
-            console.log('接收器V2.0加载完成');
-            if (typeof ZXing === 'undefined' || !BrowserQRCodeReader) {
-                showStatus('ZXing库加载失败', 'error');
-                startScanBtn.disabled = true;
-                return;
-            }
-            await initCameraList();
-            await loadSavedChunks();
             updateUI();
-            showStatus('准备就绪，请点击开始扫描', 'info');
-        });
+            checkCompletion();
+        } catch(err){ console.error(err); showFloatingMessage('处理失败',true); }
+    }
 
-        async function initCameraList() {
-            try {
-                let devices = [];
-                try {
-                    devices = await BrowserQRCodeReader.listVideoInputDevices();
-                } catch(e) {
-                    const native = await navigator.mediaDevices.enumerateDevices();
-                    devices = native.filter(d => d.kind === 'videoinput');
+    async function checkCompletion(){
+        if(fileNameData && totalDataChunks>0 && receivedDataChunks.size >= totalDataChunks){
+            showStatus('所有分片接收完成，正在自动重组...','success');
+            showFloatingMessage('🎉 接收完成，重组中...');
+            await assembleFileAutomatically();
+            setTimeout(()=>stopScanning(),500);
+        }
+    }
+
+    async function assembleFileAutomatically(){
+        try{
+            if(!fileNameData){ showStatus('缺少文件名数据','error'); return; }
+            if(receivedDataChunks.size < totalDataChunks){ showStatus(`缺少 ${totalDataChunks-receivedDataChunks.size} 个分片`,'error'); return; }
+            let combinedBase45 = '';
+            for(let i=0;i<totalDataChunks;i++){
+                const chunk = receivedDataChunks.get(i);
+                if(!chunk?.d) throw new Error(`缺少分片 ${i+1}`);
+                combinedBase45 += chunk.d;
+            }
+            let cleanBase45 = combinedBase45.replace(/\s/g,'');
+            let decodedBytes = base45.decode(cleanBase45);
+            let decompressed;
+            try{ decompressed = pako.inflate(decodedBytes); } catch(e){ decompressed = decodedBytes; }
+            const blob = new Blob([decompressed]);
+            const url = URL.createObjectURL(blob);
+            fileNameSpan.textContent = receivedFileName;
+            fileSizeSpan.textContent = (decompressed.length < 1024) ? decompressed.length+' B' : (decompressed.length/1024).toFixed(1)+' KB';
+            fileTypeSpan.textContent = receivedFileName.split('.').pop().toUpperCase()+' 文件';
+            dataChunksCountSpan.textContent = totalDataChunks;
+            fileInfoDiv.style.display = 'block';
+            downloadSection.classList.remove('hidden');
+            downloadBtn.onclick = ()=>{
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = receivedFileName;
+                a.click();
+                setTimeout(()=>URL.revokeObjectURL(url),100);
+                showFloatingMessage('⬇️ 下载开始');
+            };
+            showStatus('文件重组完成，可下载','success');
+            showFloatingMessage('重组完成！');
+        } catch(err){
+            console.error(err);
+            showStatus('重组失败: '+err.message,'error');
+            showFloatingMessage('重组失败，请重试',true);
+        }
+    }
+
+    submitManualBtn.addEventListener('click', ()=>{
+        const val = manualData.value.trim();
+        if(val){ processChunkData(val); manualData.value=''; }
+        else showStatus('请输入数据','error');
+    });
+
+    async function loadSavedChunks(){
+        try{
+            const store = localforage.createInstance({ name: 'qrcode-filename-separate' });
+            const keys = await store.keys();
+            const savedFileName = await store.getItem('fileNameData');
+            if(savedFileName){
+                fileNameData = savedFileName;
+                receivedFileName = decodeFileName(fileNameData.n);
+                receivedFileSize = fileNameData.s;
+                currentFileFingerprint = fileNameData.f;
+                totalDataChunks = fileNameData.tc || 0;
+                fingerprintValueSpan.textContent = currentFileFingerprint;
+                currentFingerprintDiv.style.display = 'block';
+                const savedTime = await store.getItem('receiveTime');
+                receiveTimeSpan.textContent = savedTime ? new Date(savedTime).toLocaleString() : new Date().toLocaleString();
+            }
+            for(const key of keys){
+                if(key.startsWith('dataChunk_')){
+                    const id = parseInt(key.replace('dataChunk_',''));
+                    const chunk = await store.getItem(key);
+                    if(chunk) receivedDataChunks.set(id, chunk);
                 }
-                cameraSelect.innerHTML = '<option value="">选择摄像头...</option>';
-                devices.forEach((device, idx) => {
-                    const option = document.createElement('option');
-                    option.value = device.deviceId;
-                    option.text = device.label || `摄像头 ${idx+1}`;
-                    cameraSelect.appendChild(option);
-                });
-                if (devices.length === 0) scanStatus.textContent = '未找到摄像头';
-                else scanStatus.textContent = `找到 ${devices.length} 个摄像头`;
-            } catch(err) {
-                console.error(err);
-                scanStatus.textContent = '摄像头检测失败';
             }
+            console.log(`加载了 ${receivedDataChunks.size} 个数据分片`);
+        } catch(e){ console.error(e); }
+    }
+
+    function updateUI(){
+        const totalReceived = receivedDataChunks.size + (fileNameData?1:0);
+        const totalToReceive = totalDataChunks + 1;
+        receivedCountSpan.textContent = totalReceived;
+        totalCountSpan.textContent = totalToReceive;
+        const percent = totalToReceive>0 ? Math.round((totalReceived/totalToReceive)*100) : 0;
+        percentageSpan.textContent = percent+'%';
+        progressFill.style.width = percent+'%';
+        updateChunksDisplay();
+        if(fileNameData){
+            fileNameSpan.textContent = receivedFileName;
+            fileSizeSpan.textContent = formatFileSize(receivedFileSize);
+            fileTypeSpan.textContent = getFileTypeFromName(receivedFileName);
+            dataChunksCountSpan.textContent = totalDataChunks;
+            fileInfoDiv.style.display = 'block';
         }
-
-        startScanBtn.addEventListener('click', async () => {
-            if (isProcessing) return;
-            if (isScanning) { await stopScanning(); return; }
-            isProcessing = true;
-            try {
-                startScanBtn.disabled = true;
-                scanBtnText.textContent = '⏳ 启动中...';
-                scanSection.classList.add('active');
-                const deviceId = cameraSelect.value || undefined;
-                codeReader = new BrowserQRCodeReader({ tryHarder: true, formats: [ZXing.BarcodeFormat.QR_CODE] });
-                scanControls = await codeReader.decodeFromVideoDevice(deviceId, videoElement, (result, error, controls) => {
-                    if (result) handleScanResult(result.getText());
-                    if (error && !error.message?.includes('NotFound') && !error.message?.includes('No QR')) console.log(error);
-                    if (controls && !scanControls) scanControls = controls;
-                });
-                isScanning = true;
-                startScanBtn.disabled = false;
-                scanBtnText.textContent = '⏹️ 停止扫描';
-                scanStatus.textContent = '扫描中...';
-                showStatus('扫描已启动', 'success');
-            } catch(err) {
-                console.error(err);
-                if (err.name === 'NotAllowedError') showStatus('请允许摄像头权限', 'error');
-                else showStatus('启动失败: ' + err.message, 'error');
-                await stopScanning();
-                startScanBtn.disabled = false;
-                scanBtnText.textContent = '🚀 开始扫描二维码';
-            } finally { isProcessing = false; }
-        });
-
-        function handleScanResult(decodedText) {
-            const now = Date.now();
-            if (now - lastScanTime < 1000 && decodedText === lastDecodedText) return;
-            lastScanTime = now;
-            lastDecodedText = decodedText;
-            scanSection.classList.add('scan-success');
-            setTimeout(() => scanSection.classList.remove('scan-success'), 300);
-            processChunkData(decodedText);
+    }
+    function updateChunksDisplay(){
+        if(totalDataChunks===0 && !fileNameData){ chunksDisplay.innerHTML = '<div style="text-align:center;">暂无分片</div>'; return; }
+        let html='';
+        for(let i=0;i<totalDataChunks;i++){
+            const rec = receivedDataChunks.has(i);
+            html += `<div class="chunk-item ${rec?'chunk-received':'chunk-missing'}" title="数据分片 ${i+1}${rec?' 已接收':' 未接收'}">${i+1}</div>`;
         }
-
-        async function stopScanning() {
-            isScanning = false;
-            if (scanControls?.stop) scanControls.stop();
-            if (codeReader?.reset) codeReader.reset();
-            if (videoElement.srcObject) {
-                videoElement.srcObject.getTracks().forEach(track => track.stop());
-                videoElement.srcObject = null;
-            }
-            scanControls = null; codeReader = null;
-            scanSection.classList.remove('active');
-            scanBtnText.textContent = '🚀 开始扫描二维码';
-            startScanBtn.disabled = false;
-            showStatus('扫描已停止', 'info');
+        html += `<div class="chunk-item ${fileNameData?'chunk-filename':'chunk-missing'}" title="文件名分片">📄</div>`;
+        chunksDisplay.innerHTML = html;
+    }
+    clearBtn.addEventListener('click', async()=>{
+        if(confirm('清除所有接收数据？')){
+            await stopScanning();
+            const store = localforage.createInstance({ name: 'qrcode-filename-separate' });
+            await store.clear();
+            receivedDataChunks.clear();
+            fileNameData=null; totalDataChunks=0; currentFileFingerprint=null; receivedFileName=''; receivedFileSize=0;
+            currentFingerprintDiv.style.display='none';
+            fileInfoDiv.style.display='none';
+            downloadSection.classList.add('hidden');
+            receiveTimeSpan.textContent='未知';
+            updateUI();
+            showStatus('数据已清除','info');
         }
-
-        closeScanBtn.addEventListener('click', stopScanning);
-
-        async function processChunkData(data) {
-            try {
-                let trimmed = data.trim();
-                if (!trimmed.startsWith('{') && trimmed.includes('{')) trimmed = trimmed.substring(trimmed.indexOf('{'));
-                if (!trimmed.endsWith('}') && trimmed.includes('}')) trimmed = trimmed.substring(0, trimmed.lastIndexOf('}') + 1);
-                if (!trimmed.startsWith('{') || !trimmed.endsWith('}')) throw new Error('无效JSON');
-                const chunk = JSON.parse(trimmed);
-                
-                if (chunk.t === 'fn') {
-                    // 文件名分片
-                    if (typeof chunk.f !== 'string' || typeof chunk.n !== 'string' || typeof chunk.s !== 'number' || typeof chunk.h !== 'string')
-                        throw new Error('文件名数据格式错误');
-                    const crcData = { t: chunk.t, f: chunk.f, n: chunk.n, s: chunk.s, ts: chunk.ts, tc: chunk.tc };
-                    const calcHash = calculateCRC32(JSON.stringify(crcData));
-                    if (calcHash !== chunk.h.toLowerCase()) {
-                        showFloatingMessage('❌ 文件名校验失败', true);
-                        return;
-                    }
-                    if (currentFileFingerprint && chunk.f !== currentFileFingerprint) {
-                        showFloatingMessage('⚠️ 文件指纹不匹配', true);
-                        return;
-                    }
-                    fileNameData = chunk;
-                    receivedFileName = decodeFileName(chunk.n);
-                    if (!currentFileFingerprint) {
-                        currentFileFingerprint = chunk.f;
-                        fingerprintValueSpan.textContent = currentFileFingerprint;
-                        currentFingerprintDiv.style.display = 'block';
-                    }
-                    totalDataChunks = chunk.tc || 0;
-                    receivedFileSize = chunk.s;
-                    const store = localforage.createInstance({ name: 'qrcode-filename-separate' });
-                    await store.setItem('fileNameData', fileNameData);
-                    await store.setItem('fileName', receivedFileName);
-                    await store.setItem('fileSize', receivedFileSize);
-                    await store.setItem('totalDataChunks', totalDataChunks);
-                    await store.setItem('receiveTime', new Date().toISOString());
-                    receiveTimeSpan.textContent = new Date().toLocaleString();
-                    showFloatingMessage('📄 文件名分片扫描成功');
-                    showStatus(`文件名: ${receivedFileName}`, 'success');
-                } else {
-                    // 数据分片
-                    if (typeof chunk.i !== 'number' || typeof chunk.t !== 'number' || typeof chunk.h !== 'string' || typeof chunk.d !== 'string' || typeof chunk.f !== 'string')
-                        throw new Error('数据分片格式错误');
-                    if (!currentFileFingerprint) {
-                        currentFileFingerprint = chunk.f;
-                        fingerprintValueSpan.textContent = currentFileFingerprint;
-                        currentFingerprintDiv.style.display = 'block';
-                    } else if (chunk.f !== currentFileFingerprint) {
-                        showFloatingMessage('⚠️ 二维码不属于当前文件', true);
-                        return;
-                    }
-                    const calcHash = calculateCRC32(chunk.d);
-                    if (calcHash !== chunk.h.toLowerCase()) {
-                        showFloatingMessage(`❌ 分片 ${chunk.i+1} 校验失败`, true);
-                        return;
-                    }
-                    if (receivedDataChunks.has(chunk.i)) {
-                        showFloatingMessage(`⚠️ 分片 ${chunk.i+1} 已存在`);
-                        return;
-                    }
-                    if (totalDataChunks === 0) totalDataChunks = chunk.t;
-                    receivedDataChunks.set(chunk.i, chunk);
-                    const store = localforage.createInstance({ name: 'qrcode-filename-separate' });
-                    await store.setItem(`dataChunk_${chunk.i}`, chunk);
-                    showFloatingMessage(`✅ 数据分片 ${chunk.i+1}/${chunk.t}`);
-                }
-                updateUI();
-                checkCompletion();
-            } catch(err) {
-                console.error(err);
-                showFloatingMessage('❌ 处理失败', true);
-            }
-        }
-
-        function checkCompletion() {
-            if (fileNameData && totalDataChunks > 0 && receivedDataChunks.size >= totalDataChunks) {
-                assembleBtn.disabled = false;
-                showStatus('✅ 所有分片接收完成！点击重组文件', 'success');
-                showFloatingMessage('🎉 接收完成！');
-                setTimeout(() => stopScanning(), 500);
-            }
-        }
-
-        submitManualBtn.addEventListener('click', () => {
-            const val = manualData.value.trim();
-            if (val) { processChunkData(val); manualData.value = ''; }
-            else showStatus('请输入二维码数据', 'error');
-        });
-
-        async function loadSavedChunks() {
-            try {
-                const store = localforage.createInstance({ name: 'qrcode-filename-separate' });
-                const keys = await store.keys();
-                const savedFileName = await store.getItem('fileNameData');
-                if (savedFileName) {
-                    fileNameData = savedFileName;
-                    receivedFileName = decodeFileName(fileNameData.n);
-                    receivedFileSize = fileNameData.s;
-                    currentFileFingerprint = fileNameData.f;
-                    totalDataChunks = fileNameData.tc || 0;
-                    fingerprintValueSpan.textContent = currentFileFingerprint;
-                    currentFingerprintDiv.style.display = 'block';
-                    const savedTime = await store.getItem('receiveTime');
-                    receiveTimeSpan.textContent = savedTime ? new Date(savedTime).toLocaleString() : new Date().toLocaleString();
-                }
-                for (const key of keys) {
-                    if (key.startsWith('dataChunk_')) {
-                        const id = parseInt(key.replace('dataChunk_', ''));
-                        const chunk = await store.getItem(key);
-                        if (chunk) receivedDataChunks.set(id, chunk);
-                    }
-                }
-                console.log(`加载了 ${receivedDataChunks.size} 个数据分片`);
-            } catch(e) { console.error(e); }
-        }
-
-        function updateUI() {
-            const totalReceived = receivedDataChunks.size + (fileNameData ? 1 : 0);
-            const totalToReceive = totalDataChunks + 1;
-            receivedCountSpan.textContent = totalReceived;
-            totalCountSpan.textContent = totalToReceive;
-            const percent = totalToReceive > 0 ? Math.round((totalReceived / totalToReceive) * 100) : 0;
-            percentageSpan.textContent = percent + '%';
-            progressFill.style.width = percent + '%';
-            updateChunksDisplay();
-            if (fileNameData) {
-                fileNameSpan.textContent = receivedFileName;
-                fileSizeSpan.textContent = formatFileSize(receivedFileSize);
-                fileTypeSpan.textContent = getFileTypeFromName(receivedFileName);
-                dataChunksCountSpan.textContent = totalDataChunks;
-                fileInfoDiv.style.display = 'block';
-            }
-            assembleBtn.disabled = !(fileNameData && totalDataChunks > 0 && receivedDataChunks.size >= totalDataChunks);
-        }
-
-        function updateChunksDisplay() {
-            if (totalDataChunks === 0 && !fileNameData) {
-                chunksDisplay.innerHTML = '<div style="text-align:center; color:#666; padding:10px; width:100%;">暂无分片数据</div>';
-                return;
-            }
-            let html = '';
-            for (let i = 0; i < totalDataChunks; i++) {
-                const received = receivedDataChunks.has(i);
-                html += `<div class="chunk-item ${received ? 'chunk-received' : 'chunk-missing'}" title="数据分片 ${i+1}${received ? ' (已接收)' : ' (未接收)'}">${i+1}</div>`;
-            }
-            html += `<div class="chunk-item ${fileNameData ? 'chunk-filename' : 'chunk-missing'}" title="文件名分片">📄</div>`;
-            chunksDisplay.innerHTML = html;
-        }
-
-        assembleBtn.addEventListener('click', async () => {
-            if (!fileNameData) { showStatus('缺少文件名数据', 'error'); return; }
-            if (receivedDataChunks.size < totalDataChunks) {
-                showStatus(`缺少 ${totalDataChunks - receivedDataChunks.size} 个数据分片`, 'error');
-                return;
-            }
-            try {
-                assembleBtn.disabled = true;
-                assembleBtnText.textContent = '⏳ 重组中...';
-                let combinedBase64 = '';
-                for (let i = 0; i < totalDataChunks; i++) {
-                    const chunk = receivedDataChunks.get(i);
-                    if (!chunk?.d) throw new Error(`缺少分片 ${i+1}`);
-                    combinedBase64 += chunk.d;
-                }
-                // 清理Base64: 移除所有空白字符，确保正确填充
-                let cleanBase64 = combinedBase64.replace(/\s/g, '');
-                while (cleanBase64.length % 4 !== 0) cleanBase64 += '=';
-                const binaryString = atob(cleanBase64);
-                const bytes = new Uint8Array(binaryString.length);
-                for (let i = 0; i < binaryString.length; i++) bytes[i] = binaryString.charCodeAt(i);
-                let decompressed;
-                try { decompressed = pako.inflate(bytes); } catch(e) { decompressed = bytes; }
-                const blob = new Blob([decompressed]);
-                const url = URL.createObjectURL(blob);
-                downloadBtn.onclick = () => {
-                    const a = document.createElement('a');
-                    a.href = url;
-                    a.download = receivedFileName;
-                    a.click();
-                    setTimeout(() => URL.revokeObjectURL(url), 100);
-                    showFloatingMessage('⬇️ 下载开始');
-                };
-                downloadSection.classList.remove('hidden');
-                showStatus('✅ 文件重组完成，点击下载', 'success');
-                assembleBtnText.textContent = '✅ 重组完成';
-            } catch(err) {
-                console.error(err);
-                showStatus('重组失败: ' + err.message, 'error');
-                assembleBtn.disabled = false;
-                assembleBtnText.textContent = '🛠️ 重组文件';
-            }
-        });
-
-        clearBtn.addEventListener('click', async () => {
-            if (confirm('清除所有接收的数据？')) {
-                await stopScanning();
-                const store = localforage.createInstance({ name: 'qrcode-filename-separate' });
-                await store.clear();
-                receivedDataChunks.clear();
-                fileNameData = null;
-                totalDataChunks = 0;
-                currentFileFingerprint = null;
-                receivedFileName = '';
-                receivedFileSize = 0;
-                currentFingerprintDiv.style.display = 'none';
-                fileInfoDiv.style.display = 'none';
-                downloadSection.classList.add('hidden');
-                assembleBtn.disabled = true;
-                assembleBtnText.textContent = '🛠️ 重组文件';
-                receiveTimeSpan.textContent = '未知';
-                updateUI();
-                showStatus('数据已清除', 'info');
-            }
-        });
-
-        function formatFileSize(bytes) {
-            if (bytes < 1024) return bytes + ' B';
-            if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
-            return (bytes / 1048576).toFixed(1) + ' MB';
-        }
-        function getFileTypeFromName(name) {
-            const ext = name.split('.').pop().toLowerCase();
-            const map = { txt:'文本文档', pdf:'PDF', jpg:'JPEG', jpeg:'JPEG', png:'PNG', gif:'GIF', zip:'压缩包', rar:'压缩包', doc:'Word', docx:'Word', xls:'Excel', xlsx:'Excel', ppt:'PPT', pptx:'PPT', mp3:'音频', mp4:'视频', js:'JavaScript', html:'网页', css:'样式', json:'JSON' };
-            return map[ext] || '未知类型';
-        }
-    </script>
+    });
+    function formatFileSize(bytes){
+        if(bytes<1024) return bytes+' B';
+        if(bytes<1048576) return (bytes/1024).toFixed(1)+' KB';
+        return (bytes/1048576).toFixed(1)+' MB';
+    }
+    function getFileTypeFromName(name){
+        const ext = name.split('.').pop().toLowerCase();
+        const map = {txt:'文本', pdf:'PDF', jpg:'图片', jpeg:'图片', png:'图片', gif:'图片', zip:'压缩包', rar:'压缩包', doc:'Word', docx:'Word', xls:'Excel', xlsx:'Excel', ppt:'PPT', pptx:'PPT', mp3:'音频', mp4:'视频', js:'JS', html:'网页', css:'样式', json:'JSON' };
+        return map[ext] || '文件';
+    }
+    // 初始更新UI
+    updateUI();
+</script>
 </body>
 </html>
