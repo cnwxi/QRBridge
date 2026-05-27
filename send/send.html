@@ -3,10 +3,11 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>离线二维码文件传输系统 - V2.0</title>
+    <title>离线二维码文件传输系统 - V2.1</title>
     <script src="js/pako.min.js"></script>
     <script src="js/qrcode.min.js"></script>
     <style>
+        /* 完全保留您原版的样式，不做任何改动 */
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
             font-family: 'Segoe UI', system-ui, sans-serif;
@@ -234,47 +235,54 @@
         .settings-panel::-webkit-scrollbar-track { background: #f1f1f1; }
         .settings-panel::-webkit-scrollbar-thumb { background: #c1c1c1; border-radius: 3px; }
     </style>
-    <!-- 内联 Base45 实现 -->
+    <!--  Base45 实现 (RFC 9285) -->
     <script>
         (function(global) {
-            const alphabet = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ $%*+-./:';
+            const ALPHABET = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ $%*+-./:';
             function encode(input) {
                 if (typeof input === 'string') {
                     input = new TextEncoder().encode(input);
                 }
                 let result = [];
-                for (let i = 0; i < input.length; i += 2) {
-                    let val = input[i];
+                let i = 0;
+                while (i < input.length) {
                     if (i + 1 < input.length) {
-                        val = val + input[i + 1] * 256;
-                    }
-                    let c1 = Math.floor(val / 45);
-                    let c2 = val % 45;
-                    result.push(alphabet[c1 % 45], alphabet[Math.floor(c1 / 45)]);
-                    if (i + 1 < input.length) {
-                        result.push(alphabet[c2]);
+                        let val = input[i] + (input[i+1] << 8);
+                        let d0 = val % 45;
+                        let d1 = Math.floor(val / 45) % 45;
+                        let d2 = Math.floor(val / (45*45));
+                        result.push(ALPHABET[d0], ALPHABET[d1], ALPHABET[d2]);
+                        i += 2;
                     } else {
-                        result.push(alphabet[val % 45]);
+                        let val = input[i];
+                        let d0 = val % 45;
+                        let d1 = Math.floor(val / 45);
+                        result.push(ALPHABET[d0], ALPHABET[d1]);
+                        i += 1;
                     }
                 }
                 return result.join('');
             }
-            function decode(input) {
+            function decode(base45Str) {
                 const numbers = [];
-                for (let i = 0; i < input.length; i++) {
-                    const idx = alphabet.indexOf(input[i]);
-                    if (idx === -1) throw new Error(`Invalid Base45 char: ${input[i]}`);
+                for (let i = 0; i < base45Str.length; i++) {
+                    const idx = ALPHABET.indexOf(base45Str[i]);
+                    if (idx === -1) throw new Error(`Invalid Base45 char: ${base45Str[i]}`);
                     numbers.push(idx);
                 }
                 const result = [];
-                for (let i = 0; i < numbers.length; i += 3) {
-                    let val = numbers[i] + numbers[i + 1] * 45;
+                let i = 0;
+                while (i < numbers.length) {
                     if (i + 2 < numbers.length) {
-                        val += numbers[i + 2] * 45 * 45;
-                    }
-                    result.push(val % 256);
-                    if (val > 255) {
-                        result.push(Math.floor(val / 256));
+                        let val = numbers[i] + numbers[i+1] * 45 + numbers[i+2] * 45 * 45;
+                        result.push(val & 0xFF, (val >> 8) & 0xFF);
+                        i += 3;
+                    } else if (i + 1 < numbers.length) {
+                        let val = numbers[i] + numbers[i+1] * 45;
+                        result.push(val & 0xFF);
+                        i += 2;
+                    } else {
+                        throw new Error('Invalid Base45 length');
                     }
                 }
                 return new Uint8Array(result);
@@ -299,16 +307,16 @@
             </div>
         </div>
         <div class="card">
-            <h3>⚙️ 2. 分片大小 (Base45字符数)</h3>
+            <h3>⚙️ 2. 分片大小 (字节数)</h3>
             <div class="slider-container">
-                <input type="range" id="chunkSizeSlider" min="500" max="1500" value="1200" step="50">
-                <div id="chunkSizeValue" class="slider-value">1200 字符</div>
+                <input type="range" id="chunkSizeSlider" min="800" max="1800" value="1200" step="25">
+                <div id="chunkSizeValue" class="slider-value">1200 字节</div>
             </div>
             <div class="size-info">
-                <span>小 (500)</span><span>推荐 (1200)</span><span>大 (1500)</span>
+                <span>小 (800)</span><span>推荐 (1200)</span><span>大 (1800)</span>
             </div>
             <div class="warning-box">
-                ⚠️ 每个分片的JSON必须小于1800字符，否则调整分片大小。
+                ⚠️ 每个分片的JSON必须小于1800字符，字节分片后Base45编码长度约增加22%。
             </div>
             <div id="estimatedInfo" style="margin-top:12px; color:#3498db; font-weight:500;">
                 预估二维码: <span id="estimatedChunks">--</span> 个数据 + 1文件名
@@ -317,11 +325,11 @@
         <div class="card">
             <h3>🔍 3. 二维码尺寸</h3>
             <div class="slider-container">
-                <input type="range" id="qrSizeSlider" min="200" max="800" value="500" step="20">
-                <div id="qrSizeValue" class="slider-value">500 px</div>
+                <input type="range" id="qrSizeSlider" min="400" max="1000" value="600" step="20">
+                <div id="qrSizeValue" class="slider-value">600 px</div>
             </div>
             <div class="size-info">
-                <span>小 (200px)</span><span>大 (800px)</span>
+                <span>小 (400px)</span><span>大 (1000px)</span>
             </div>
         </div>
         <div class="control-group">
@@ -352,7 +360,7 @@
 <script>
     // 全局配置
     const CONFIG = {
-        CHUNK_SIZE: 1200,      // Base45字符数
+        CHUNK_SIZE_BYTES: 400,   // 改为字节数
         QR_DISPLAY_SIZE: 500,
         QR_GENERATE_SIZE: 500,
         MAX_JSON_SIZE: 1800,
@@ -360,14 +368,14 @@
         PACKET_TYPES: { DATA: 'data', FILENAME: 'fn' }
     };
     let file = null;
-    let chunks = [];            // 存储数据分片对象 {i, t, h, f, d}
+    let chunks = [];
     let fileNameQrCode = null;
     let fileFingerprint = '';
     let originalFileName = '';
     let originalFileSize = 0;
-    let currentIndex = 0;      // 当前显示的第几个二维码（包括文件名）
+    let currentIndex = 0;
     let totalQRCodes = 0;
-    let qrCodeImages = [];      // 存储每个二维码的img元素或占位符
+    let qrCodeImages = [];
 
     // DOM 元素
     const fileInput = document.getElementById('fileInput');
@@ -402,7 +410,6 @@
         if (typeof pako !== 'undefined' && pako.crc32) {
             return pako.crc32(data).toString(36).padStart(5, '0').slice(-5);
         }
-        // fallback
         const table = new Uint32Array(256);
         for (let i = 0; i < 256; i++) {
             let c = i;
@@ -442,29 +449,28 @@
     function showSuccess(msg) { statusDiv.innerHTML = `✅ ${msg}`; statusDiv.className = 'status status-success'; statusDiv.style.background = '#d4edda'; statusDiv.style.color = '#155724'; }
     function showInfo(msg) { statusDiv.innerHTML = `ℹ️ ${msg}`; statusDiv.className = 'status status-info'; statusDiv.style.background = '#d1ecf1'; statusDiv.style.color = '#0c5460'; }
 
-    // 更新预估
+    // 更新预估（根据字节分片）
     function updateChunkEstimation() {
         if (!file) { estimatedChunksSpan.textContent = '--'; return; }
-        const estimatedCompressedSize = file.size * 0.6;
-        const estimatedBase45Len = Math.ceil(estimatedCompressedSize / 2) * 3;
-        const estimated = Math.ceil(estimatedBase45Len / CONFIG.CHUNK_SIZE);
+        const estimatedCompressedSize = file.size * 0.6; // 粗略估计压缩后大小
+        const estimated = Math.ceil(estimatedCompressedSize / CONFIG.CHUNK_SIZE_BYTES);
         estimatedChunksSpan.textContent = estimated + ' + 1';
     }
 
-    // 生成二维码序列（数据+文件名）
+    // 生成二维码序列（关键修改：先按字节分片，再对每个分片独立Base45编码）
     async function generateAllQRCodes() {
-        // 读取压缩并Base45编码
         const fileBuffer = await readFileAsArrayBuffer(file);
         const compressed = pako.deflate(new Uint8Array(fileBuffer), { level: 9 });
-        const fullBase45 = base45.encode(new Uint8Array(compressed));
-        const totalDataChunks = Math.ceil(fullBase45.length / CONFIG.CHUNK_SIZE);
+        const compressedBytes = new Uint8Array(compressed);
+        const totalDataChunks = Math.ceil(compressedBytes.length / CONFIG.CHUNK_SIZE_BYTES);
         chunks = [];
         for (let i = 0; i < totalDataChunks; i++) {
-            const start = i * CONFIG.CHUNK_SIZE;
-            const end = Math.min(start + CONFIG.CHUNK_SIZE, fullBase45.length);
-            const chunkData = fullBase45.substring(start, end);
-            const crc = calculateCRC32(chunkData);
-            chunks.push({ i, t: totalDataChunks, h: crc, f: fileFingerprint, d: chunkData });
+            const start = i * CONFIG.CHUNK_SIZE_BYTES;
+            const end = Math.min(start + CONFIG.CHUNK_SIZE_BYTES, compressedBytes.length);
+            const chunkBytes = compressedBytes.slice(start, end);
+            const chunkBase45 = base45.encode(chunkBytes);
+            const crc = calculateCRC32(chunkBase45);
+            chunks.push({ i, t: totalDataChunks, h: crc, f: fileFingerprint, d: chunkBase45 });
         }
         // 文件名分片
         const encodedName = encodeFileName(originalFileName);
@@ -480,16 +486,12 @@
         fileNameData.h = calculateCRC32(JSON.stringify(crcData));
         fileNameQrCode = fileNameData;
         totalQRCodes = chunks.length + 1;
-        // 生成所有二维码图片
         qrCodeImages = new Array(totalQRCodes);
-        // 清空容器
         qrImageContainer.innerHTML = '';
-        // 依次生成（使用 setTimeout 避免阻塞）
         for (let idx = 0; idx < chunks.length; idx++) {
             await generateSingleQR(idx, chunks[idx], 'data');
         }
         await generateSingleQR(chunks.length, fileNameQrCode, 'filename');
-        // 显示第一张
         currentIndex = 0;
         updateNavigationButtons();
         showQRAtIndex(currentIndex);
@@ -497,6 +499,7 @@
         showSuccess(`生成成功！共 ${totalQRCodes} 个二维码`);
     }
 
+    // 生成单个二维码图片
     function generateSingleQR(index, chunk, type) {
         return new Promise((resolve) => {
             const jsonStr = JSON.stringify(chunk);
@@ -524,7 +527,6 @@
                     img.style.display = 'block';
                     img.style.margin = '0 auto';
                 } else {
-                    // 失败时创建错误占位
                     img = document.createElement('div');
                     img.textContent = '生成失败';
                     img.style.width = CONFIG.QR_DISPLAY_SIZE + 'px';
@@ -541,6 +543,7 @@
         });
     }
 
+
     function showQRAtIndex(index) {
         qrImageContainer.innerHTML = '';
         if (qrCodeImages[index]) {
@@ -551,12 +554,10 @@
         pageInfoSpan.textContent = `${index+1} / ${totalQRCodes}`;
         updateNavigationButtons();
     }
-
     function updateNavigationButtons() {
         prevBtn.disabled = (currentIndex <= 0);
         nextBtn.disabled = (currentIndex >= totalQRCodes - 1);
     }
-
     function goPrev() {
         if (currentIndex > 0) {
             currentIndex--;
@@ -569,8 +570,6 @@
             showQRAtIndex(currentIndex);
         }
     }
-
-    // 键盘事件
     function onKeyDown(e) {
         if (totalQRCodes === 0) return;
         const key = e.key;
@@ -582,7 +581,6 @@
             goNext();
         }
     }
-    // 鼠标滚轮防抖
     let wheelTimer = null;
     function onWheel(e) {
         if (totalQRCodes === 0) return;
@@ -592,8 +590,6 @@
         if (e.deltaY > 0) goNext();
         else if (e.deltaY < 0) goPrev();
     }
-
-    // 事件绑定
     function bindEvents() {
         window.addEventListener('keydown', onKeyDown);
         const qrPanel = document.querySelector('.qr-panel');
@@ -601,8 +597,6 @@
         prevBtn.addEventListener('click', goPrev);
         nextBtn.addEventListener('click', goNext);
     }
-
-    // 重置
     function reset() {
         file = null;
         chunks = [];
@@ -623,8 +617,6 @@
         showInfo('请选择一个文件');
         updateChunkEstimation();
     }
-
-    // 文件选择
     fileInput.addEventListener('change', (e) => {
         file = e.target.files[0];
         if (file) {
@@ -644,17 +636,14 @@
             showInfo('请选择一个文件');
         }
     });
-
-    // 滑块
     chunkSizeSlider.addEventListener('input', () => {
-        CONFIG.CHUNK_SIZE = parseInt(chunkSizeSlider.value);
-        chunkSizeValue.textContent = CONFIG.CHUNK_SIZE + ' 字符';
+        CONFIG.CHUNK_SIZE_BYTES = parseInt(chunkSizeSlider.value);
+        chunkSizeValue.textContent = CONFIG.CHUNK_SIZE_BYTES + ' 字节';
         if (file) updateChunkEstimation();
     });
     qrSizeSlider.addEventListener('input', () => {
         CONFIG.QR_DISPLAY_SIZE = parseInt(qrSizeSlider.value);
         qrSizeValue.textContent = CONFIG.QR_DISPLAY_SIZE + ' px';
-        // 更新已显示的二维码尺寸
         qrCodeImages.forEach(img => {
             if (img && img.tagName === 'IMG') {
                 img.style.width = CONFIG.QR_DISPLAY_SIZE + 'px';
@@ -662,7 +651,6 @@
             }
         });
     });
-
     startBtn.addEventListener('click', async () => {
         if (!file) { showError('请先选择文件'); return; }
         if (typeof QRCode === 'undefined') { showError('QRCode库未加载'); return; }
@@ -680,11 +668,9 @@
             startBtn.textContent = '🚀 生成二维码';
         }
     });
-
     resetBtn.addEventListener('click', reset);
-
     bindEvents();
-    reset(); // 初始状态
+    reset();
 </script>
 </body>
 </html>
