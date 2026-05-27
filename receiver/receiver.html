@@ -3,42 +3,60 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>二维码文件接收器 - V2.0</title>
+    <title>二维码文件接收器 - V2.1</title>
     <link rel="manifest" href="data:application/json;base64,ewogICJuYW1lIjogIuemu+e6v+aWh+S7tuaOpeaUtOWZqCIsCiAgInNob3J0X25hbWUiOiAiUVLmjqXmlLblmaoiLAogICJkZXNjcmlwdGlvbiI6ICLpgJrov4fkuoznu7TnoIHluo/liJfnsbvnur/mjqXmlLbmlofku7YiLAogICJzdGFydF91cmwiOiAiLi8iLAogICJkaXNwbGF5IjogInN0YW5kYWxvbmUiLAogICJiYWNrZ3JvdW5kX2NvbG9yIjogIiMzNDk4ZGIiLAogICJ0aGVtZV9jb2xvciI6ICIjMzQ5OGRiIiwKICAiaWNvbnMiOiBbCiAgICB7CiAgICAgICJzcmMiOiAiZGF0YTppbWFnZS9wbmc7YmFzZTY0LGlWQk9SdzBLR2dvQUFBQU5TVWhFVWdBQUFNQUFBQUFEQUNBWUFBQUE2L1E4RmdBQUFBWGtTVVJCVkhqYTdkMEJDQUF3QUlQLy93QUFBQUFTVVZPUks1Q1lJST0iLAogICAgICAic2l6ZXMiOiAiMTkyeDE5MiIsCiAgICAgICJ0eXBlIjogImltYWdlL3BuZyIKICAgIH0KICBdCn0=">
     <script src="js/pako.min.js"></script>
     <script src="js/localforage.min.js"></script>
     <script src="js/index.min.js"></script>
-    <!-- 内联 Base45 实现 -->
+    <!--  Base45 实现 (RFC 9285) -->
     <script>
         (function(global) {
-            const alphabet = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ $%*+-./:';
+            const ALPHABET = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ $%*+-./:';
             function encode(input) {
-                if (typeof input === 'string') input = new TextEncoder().encode(input);
+                if (typeof input === 'string') {
+                    input = new TextEncoder().encode(input);
+                }
                 let result = [];
-                for (let i = 0; i < input.length; i += 2) {
-                    let val = input[i];
-                    if (i + 1 < input.length) val = val + input[i+1] * 256;
-                    let c1 = Math.floor(val / 45);
-                    let c2 = val % 45;
-                    result.push(alphabet[c1 % 45], alphabet[Math.floor(c1 / 45)]);
-                    if (i + 1 < input.length) result.push(alphabet[c2]);
-                    else result.push(alphabet[val % 45]);
+                let i = 0;
+                while (i < input.length) {
+                    if (i + 1 < input.length) {
+                        let val = input[i] + (input[i+1] << 8);
+                        let d0 = val % 45;
+                        let d1 = Math.floor(val / 45) % 45;
+                        let d2 = Math.floor(val / (45*45));
+                        result.push(ALPHABET[d0], ALPHABET[d1], ALPHABET[d2]);
+                        i += 2;
+                    } else {
+                        let val = input[i];
+                        let d0 = val % 45;
+                        let d1 = Math.floor(val / 45);
+                        result.push(ALPHABET[d0], ALPHABET[d1]);
+                        i += 1;
+                    }
                 }
                 return result.join('');
             }
-            function decode(input) {
+            function decode(base45Str) {
                 const numbers = [];
-                for (let i = 0; i < input.length; i++) {
-                    const idx = alphabet.indexOf(input[i]);
-                    if (idx === -1) throw new Error(`Invalid Base45 char: ${input[i]}`);
+                for (let i = 0; i < base45Str.length; i++) {
+                    const idx = ALPHABET.indexOf(base45Str[i]);
+                    if (idx === -1) throw new Error(`Invalid Base45 char: ${base45Str[i]}`);
                     numbers.push(idx);
                 }
                 const result = [];
-                for (let i = 0; i < numbers.length; i += 3) {
-                    let val = numbers[i] + numbers[i+1] * 45;
-                    if (i+2 < numbers.length) val += numbers[i+2] * 45 * 45;
-                    result.push(val % 256);
-                    if (val > 255) result.push(Math.floor(val / 256));
+                let i = 0;
+                while (i < numbers.length) {
+                    if (i + 2 < numbers.length) {
+                        let val = numbers[i] + numbers[i+1] * 45 + numbers[i+2] * 45 * 45;
+                        result.push(val & 0xFF, (val >> 8) & 0xFF);
+                        i += 3;
+                    } else if (i + 1 < numbers.length) {
+                        let val = numbers[i] + numbers[i+1] * 45;
+                        result.push(val & 0xFF);
+                        i += 2;
+                    } else {
+                        throw new Error('Invalid Base45 length');
+                    }
                 }
                 return new Uint8Array(result);
             }
@@ -46,6 +64,7 @@
         })(window);
     </script>
     <style>
+        /*  */
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
             font-family: -apple-system, sans-serif;
@@ -202,6 +221,7 @@
     <div class="footer"><p>扫描完成后自动重组 | 支持断点续传</p><p>Base45 高效编码</p></div>
 </div>
 <script>
+
     let receivedDataChunks = new Map();
     let fileNameData = null;
     let totalDataChunks = 0;
@@ -216,9 +236,9 @@
     let lastScanTime = 0;
     let base45 = window.base45;
 
+    // 辅助函数
     function calculateCRC32(data) {
         if (typeof pako !== 'undefined' && pako.crc32) return pako.crc32(data).toString(36).padStart(5,'0').slice(-5);
-        // fallback
         const table = new Uint32Array(256);
         for(let i=0;i<256;i++){let c=i;for(let j=0;j<8;j++)c=(c&1)?0xEDB88320^(c>>>1):c>>>1;table[i]=c;}
         let crc=0xFFFFFFFF;
@@ -236,6 +256,7 @@
             try{ return decodeURIComponent(escape(atob(base64Name))); }catch(e2){ return base64Name; }
         }
     }
+    // DOM 元素获取
     const videoElement = document.getElementById('videoElement');
     const cameraSelect = document.getElementById('cameraSelect');
     const startScanBtn = document.getElementById('startScanBtn');
@@ -265,6 +286,7 @@
     const fingerprintValueSpan = document.getElementById('fingerprintValue');
     const { BrowserQRCodeReader } = ZXing;
 
+    // 界面消息函数
     function showFloatingMessage(msg, isError=false){
         const div = document.createElement('div');
         div.className = `floating-message ${isError ? 'floating-error' : ''}`;
@@ -280,6 +302,7 @@
         else statusDiv.classList.add('status-info');
     }
 
+    // 页面初始化
     document.addEventListener('DOMContentLoaded', async()=>{
         console.log('Receiver loaded');
         if(typeof ZXing==='undefined' || !BrowserQRCodeReader) showStatus('ZXing库加载失败','error');
@@ -355,6 +378,7 @@
     }
     closeScanBtn.addEventListener('click', stopScanning);
 
+    // 处理扫描到的数据（重组函数中改为按字节解码）
     async function processChunkData(data){
         try{
             let trimmed = data.trim();
@@ -411,20 +435,22 @@
         }
     }
 
+    // 重组时先对每个分片的Base45解码得到字节，再拼接所有字节，最后解压
     async function assembleFileAutomatically(){
         try{
             if(!fileNameData){ showStatus('缺少文件名数据','error'); return; }
             if(receivedDataChunks.size < totalDataChunks){ showStatus(`缺少 ${totalDataChunks-receivedDataChunks.size} 个分片`,'error'); return; }
-            let combinedBase45 = '';
+            // 收集所有字节（先解码每个分片的Base45）
+            let allBytes = [];
             for(let i=0;i<totalDataChunks;i++){
                 const chunk = receivedDataChunks.get(i);
                 if(!chunk?.d) throw new Error(`缺少分片 ${i+1}`);
-                combinedBase45 += chunk.d;
+                const decodedBytes = base45.decode(chunk.d);
+                for(let b of decodedBytes) allBytes.push(b);
             }
-            let cleanBase45 = combinedBase45.replace(/\s/g,'');
-            let decodedBytes = base45.decode(cleanBase45);
+            const compressedBytes = new Uint8Array(allBytes);
             let decompressed;
-            try{ decompressed = pako.inflate(decodedBytes); } catch(e){ decompressed = decodedBytes; }
+            try{ decompressed = pako.inflate(compressedBytes); } catch(e){ decompressed = compressedBytes; }
             const blob = new Blob([decompressed]);
             const url = URL.createObjectURL(blob);
             fileNameSpan.textContent = receivedFileName;
@@ -449,6 +475,7 @@
             showFloatingMessage('重组失败，请重试',true);
         }
     }
+
 
     submitManualBtn.addEventListener('click', ()=>{
         const val = manualData.value.trim();
@@ -535,7 +562,6 @@
         const map = {txt:'文本', pdf:'PDF', jpg:'图片', jpeg:'图片', png:'图片', gif:'图片', zip:'压缩包', rar:'压缩包', doc:'Word', docx:'Word', xls:'Excel', xlsx:'Excel', ppt:'PPT', pptx:'PPT', mp3:'音频', mp4:'视频', js:'JS', html:'网页', css:'样式', json:'JSON' };
         return map[ext] || '文件';
     }
-    // 初始更新UI
     updateUI();
 </script>
 </body>
