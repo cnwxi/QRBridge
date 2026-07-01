@@ -97,6 +97,37 @@
             cursor: not-allowed;
             transform: none;
         }
+        .play-controls {
+            display: flex;
+            justify-content: center;
+            gap: 12px;
+            margin: 10px 0;
+        }
+        .play-btn {
+            background: #27ae60;
+            border: none;
+            color: white;
+            font-size: 18px;
+            font-weight: bold;
+            padding: 8px 16px;
+            border-radius: 20px;
+            cursor: pointer;
+            transition: background 0.2s, transform 0.1s;
+            min-width: 100px;
+        }
+        .play-btn:hover { background: #229954; transform: translateY(-1px); }
+        .play-btn:active { transform: scale(0.96); }
+        .play-btn.playing {
+            background: #e74c3c;
+        }
+        .play-btn.playing:hover {
+            background: #c0392b;
+        }
+        .play-btn:disabled {
+            background: #bdc3c7;
+            cursor: not-allowed;
+            transform: none;
+        }
         .page-info {
             font-size: 18px;
             font-weight: 600;
@@ -105,6 +136,29 @@
             display: inline-block;
             padding: 10px 28px;
             border-radius: 48px;
+        }
+        .play-status {
+            font-size: 14px;
+            color: #27ae60;
+            font-weight: 600;
+            display: none;
+        }
+        .play-status.active {
+            display: block;
+        }
+        .toggle-row {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-top: 14px;
+            color: #2c3e50;
+            font-size: 14px;
+            font-weight: 600;
+        }
+        .toggle-row input {
+            width: 18px;
+            height: 18px;
+            cursor: pointer;
         }
         .footer-note {
             margin-top: 12px;
@@ -332,13 +386,27 @@
                 <span>小 (400px)</span><span>大 (1000px)</span>
             </div>
         </div>
+        <div class="card">
+            <h3>▶️ 4. 自动播放设置</h3>
+            <div class="slider-container">
+                <input type="range" id="playSpeedSlider" min="500" max="3000" value="1000" step="100">
+                <div id="playSpeedValue" class="slider-value">1.0 秒</div>
+            </div>
+            <div class="size-info">
+                <span>快 (500ms)</span><span>推荐 (1s)</span><span>慢 (3s)</span>
+            </div>
+            <label class="toggle-row">
+                <input type="checkbox" id="autoStartToggle" checked>
+                <span>生成后自动刷新滚动播放</span>
+            </label>
+        </div>
         <div class="control-group">
             <button id="startBtn" class="btn btn-primary">🚀 生成二维码</button>
             <button id="resetBtn" class="btn btn-secondary">🔄 重置</button>
         </div>
         <div id="status" class="status">ℹ️ 请选择一个文件</div>
         <div class="footer-note" style="margin-top: 20px;">
-            💡 支持键盘 ← ↑ / → ↓ 切换 | 鼠标滚轮切换
+            💡 生成后可使用自动播放 | 空格键快速切换 | 支持键盘 ← ↑ / → ↓ 和滚轮
         </div>
     </div>
     <div class="qr-panel">
@@ -346,6 +414,10 @@
             <div class="qr-image" id="qrImageContainer">
                 <div style="color:#7f8c8d; padding:80px 20px; font-size:18px;">点击「生成二维码」后显示</div>
             </div>
+            <div class="play-controls">
+                <button id="playBtn" class="play-btn" disabled>▶️ 自动播放</button>
+            </div>
+            <div class="play-status" id="playStatus">⏹️ 播放中...</div>
             <div class="nav-buttons">
                 <button id="prevBtn" class="nav-btn" disabled>◀</button>
                 <span id="pageInfo" class="page-info">0 / 0</span>
@@ -360,12 +432,14 @@
 <script>
     // 全局配置
     const CONFIG = {
-        CHUNK_SIZE_BYTES: 400,   // 改为字节数
-        QR_DISPLAY_SIZE: 500,
-        QR_GENERATE_SIZE: 500,
+        CHUNK_SIZE_BYTES: 1200,   // 与分片大小滑块默认值保持一致
+        QR_DISPLAY_SIZE: 600,
+        QR_GENERATE_SIZE: 600,
         MAX_JSON_SIZE: 1800,
         QR_MAX_CAPACITY: 2953,
-        PACKET_TYPES: { DATA: 'data', FILENAME: 'fn' }
+        PACKET_TYPES: { DATA: 'data', FILENAME: 'fn' },
+        PLAY_SPEED: 1000, // 自动播放速度（毫秒）
+        AUTO_START_PLAY: true
     };
     let file = null;
     let chunks = [];
@@ -376,6 +450,8 @@
     let currentIndex = 0;
     let totalQRCodes = 0;
     let qrCodeImages = [];
+    let isAutoPlaying = false;
+    let autoPlayTimer = null;
 
     // DOM 元素
     const fileInput = document.getElementById('fileInput');
@@ -390,12 +466,17 @@
     const estimatedChunksSpan = document.getElementById('estimatedChunks');
     const qrSizeSlider = document.getElementById('qrSizeSlider');
     const qrSizeValue = document.getElementById('qrSizeValue');
+    const playSpeedSlider = document.getElementById('playSpeedSlider');
+    const playSpeedValue = document.getElementById('playSpeedValue');
+    const autoStartToggle = document.getElementById('autoStartToggle');
     const startBtn = document.getElementById('startBtn');
     const resetBtn = document.getElementById('resetBtn');
     const statusDiv = document.getElementById('status');
     const qrImageContainer = document.getElementById('qrImageContainer');
     const prevBtn = document.getElementById('prevBtn');
     const nextBtn = document.getElementById('nextBtn');
+    const playBtn = document.getElementById('playBtn');
+    const playStatus = document.getElementById('playStatus');
     const pageInfoSpan = document.getElementById('pageInfo');
     const currentFileNameSpan = document.getElementById('currentFileName');
 
@@ -459,6 +540,7 @@
 
     // 生成二维码序列（关键修改：先按字节分片，再对每个分片独立Base45编码）
     async function generateAllQRCodes() {
+        stopAutoPlay();
         const fileBuffer = await readFileAsArrayBuffer(file);
         const compressed = pako.deflate(new Uint8Array(fileBuffer), { level: 9 });
         const compressedBytes = new Uint8Array(compressed);
@@ -496,7 +578,13 @@
         updateNavigationButtons();
         showQRAtIndex(currentIndex);
         currentFileNameSpan.textContent = originalFileName;
-        showSuccess(`生成成功！共 ${totalQRCodes} 个二维码`);
+        playBtn.disabled = false;
+        if (CONFIG.AUTO_START_PLAY) {
+            startAutoPlay();
+            showSuccess(`生成成功！共 ${totalQRCodes} 个二维码，正在自动刷新滚动播放`);
+        } else {
+            showSuccess(`生成成功！共 ${totalQRCodes} 个二维码`);
+        }
     }
 
     // 生成单个二维码图片
@@ -545,14 +633,24 @@
 
 
     function showQRAtIndex(index) {
+        if (totalQRCodes === 0) {
+            pageInfoSpan.textContent = '0 / 0';
+            updateNavigationButtons();
+            return;
+        }
+        currentIndex = Math.max(0, Math.min(index, totalQRCodes - 1));
         qrImageContainer.innerHTML = '';
-        if (qrCodeImages[index]) {
-            qrImageContainer.appendChild(qrCodeImages[index]);
+        if (qrCodeImages[currentIndex]) {
+            qrImageContainer.appendChild(qrCodeImages[currentIndex]);
         } else {
             qrImageContainer.innerHTML = '<div style="color:#7f8c8d;">二维码加载失败</div>';
         }
-        pageInfoSpan.textContent = `${index+1} / ${totalQRCodes}`;
+        pageInfoSpan.textContent = `${currentIndex+1} / ${totalQRCodes}`;
         updateNavigationButtons();
+    }
+    function refreshCurrentQRDisplay() {
+        if (totalQRCodes === 0) return;
+        showQRAtIndex(currentIndex);
     }
     function updateNavigationButtons() {
         prevBtn.disabled = (currentIndex <= 0);
@@ -568,17 +666,66 @@
         if (currentIndex < totalQRCodes - 1) {
             currentIndex++;
             showQRAtIndex(currentIndex);
+        } else if (isAutoPlaying) {
+            // 自动播放时循环回到第一张
+            currentIndex = 0;
+            showQRAtIndex(currentIndex);
         }
     }
+
+    // 自动播放相关函数
+    function scheduleAutoPlayTick() {
+        if (autoPlayTimer) clearTimeout(autoPlayTimer);
+        autoPlayTimer = setTimeout(() => {
+            if (!isAutoPlaying) return;
+            goNext();
+            scheduleAutoPlayTick();
+        }, CONFIG.PLAY_SPEED);
+    }
+
+    function startAutoPlay() {
+        if (totalQRCodes === 0) return;
+        isAutoPlaying = true;
+        playBtn.classList.add('playing');
+        playBtn.textContent = '⏸️ 暂停播放';
+        playStatus.classList.add('active');
+        refreshCurrentQRDisplay();
+        scheduleAutoPlayTick();
+    }
+
+    function stopAutoPlay() {
+        isAutoPlaying = false;
+        playBtn.classList.remove('playing');
+        playBtn.textContent = '▶️ 自动播放';
+        playStatus.classList.remove('active');
+        if (autoPlayTimer) {
+            clearTimeout(autoPlayTimer);
+            autoPlayTimer = null;
+        }
+    }
+
+    function toggleAutoPlay() {
+        if (isAutoPlaying) {
+            stopAutoPlay();
+        } else {
+            startAutoPlay();
+        }
+    }
+
     function onKeyDown(e) {
         if (totalQRCodes === 0) return;
         const key = e.key;
         if (key === 'ArrowLeft' || key === 'ArrowUp') {
             e.preventDefault();
+            stopAutoPlay();
             goPrev();
         } else if (key === 'ArrowRight' || key === 'ArrowDown') {
             e.preventDefault();
+            stopAutoPlay();
             goNext();
+        } else if (key === ' ') {
+            e.preventDefault();
+            toggleAutoPlay();
         }
     }
     let wheelTimer = null;
@@ -587,17 +734,34 @@
         e.preventDefault();
         if (wheelTimer) return;
         wheelTimer = setTimeout(() => { wheelTimer = null; }, 300);
+        stopAutoPlay();
         if (e.deltaY > 0) goNext();
         else if (e.deltaY < 0) goPrev();
     }
     function bindEvents() {
         window.addEventListener('keydown', onKeyDown);
+        document.addEventListener('visibilitychange', () => {
+            if (document.hidden || totalQRCodes === 0) return;
+            refreshCurrentQRDisplay();
+            if (isAutoPlaying) scheduleAutoPlayTick();
+        });
         const qrPanel = document.querySelector('.qr-panel');
         qrPanel.addEventListener('wheel', onWheel, { passive: false });
-        prevBtn.addEventListener('click', goPrev);
-        nextBtn.addEventListener('click', goNext);
+        prevBtn.addEventListener('click', () => {
+            stopAutoPlay();
+            goPrev();
+        });
+        nextBtn.addEventListener('click', () => {
+            stopAutoPlay();
+            goNext();
+        });
+        playBtn.addEventListener('click', toggleAutoPlay);
+        autoStartToggle.addEventListener('change', () => {
+            CONFIG.AUTO_START_PLAY = autoStartToggle.checked;
+        });
     }
     function reset() {
+        stopAutoPlay();
         file = null;
         chunks = [];
         fileNameQrCode = null;
@@ -614,6 +778,7 @@
         currentFileNameSpan.textContent = '未生成';
         startBtn.disabled = false;
         startBtn.textContent = '🚀 生成二维码';
+        playBtn.disabled = true;
         showInfo('请选择一个文件');
         updateChunkEstimation();
     }
@@ -650,6 +815,12 @@
                 img.style.height = CONFIG.QR_DISPLAY_SIZE + 'px';
             }
         });
+    });
+    playSpeedSlider.addEventListener('input', () => {
+        CONFIG.PLAY_SPEED = parseInt(playSpeedSlider.value);
+        const seconds = (CONFIG.PLAY_SPEED / 1000).toFixed(1);
+        playSpeedValue.textContent = seconds + ' 秒';
+        if (isAutoPlaying) scheduleAutoPlayTick();
     });
     startBtn.addEventListener('click', async () => {
         if (!file) { showError('请先选择文件'); return; }
