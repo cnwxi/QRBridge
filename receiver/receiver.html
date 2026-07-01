@@ -173,7 +173,11 @@
         .action-buttons { display: flex; gap: 10px; margin-top: 15px; }
         .action-buttons .btn { flex: 1; }
         .hidden { display: none !important; }
-        .camera-selector { margin: 10px 0; padding: 10px; border-radius: 8px; border: 1px solid #ddd; width: 100%; background: white; }
+        .camera-controls { display: flex; gap: 10px; align-items: stretch; margin: 10px 0; }
+        .camera-selector { flex: 1; min-width: 0; padding: 10px; border-radius: 8px; border: 1px solid #ddd; width: 100%; background: white; color: #2c3e50; }
+        .camera-refresh-btn { width: auto; min-width: 86px; padding: 10px 12px; margin: 0; font-size: 14px; }
+        .camera-help { margin: 6px 0 12px; color: #5d6d7e; font-size: 13px; line-height: 1.4; }
+        .camera-help-error { color: #c0392b; }
         .manual-input-section textarea { width: 100%; height: 100px; padding: 10px; border-radius: 8px; border: 1px solid #ddd; font-family: monospace; margin-bottom: 10px; resize: vertical; }
         .footer { text-align: center; margin: 20px; padding-top: 20px; border-top: 1px solid rgba(255,255,255,0.2); color: rgba(255,255,255,0.8); font-size: 13px; }
         .chunks-grid { display: flex; flex-wrap: wrap; gap: 5px; justify-content: center; margin-top: 15px; }
@@ -199,13 +203,18 @@
     </div>
     <div class="card">
         <div class="section-title">📷 1. 扫描设置</div>
-        <select id="cameraSelect" class="camera-selector"><option value="">选择摄像头...</option></select>
+        <div class="camera-controls">
+            <select id="cameraSelect" class="camera-selector" aria-label="摄像头选择"><option value="">正在检测摄像头...</option></select>
+            <button id="refreshCameraBtn" class="btn btn-primary camera-refresh-btn" type="button">刷新</button>
+        </div>
+        <div id="cameraHelp" class="camera-help">正在检测摄像头...</div>
         <button id="startScanBtn" class="btn btn-primary"><span id="scanBtnText">🚀 开始扫描</span><div id="scanStatus" style="font-size:12px;">就绪</div></button>
         <div class="manual-input-section"><p style="margin:15px 0 10px;">备用：手动输入JSON</p><textarea id="manualData" placeholder='{"i":0,"t":5,"f":"abc12","h":"xyz89","d":"..."}'></textarea><button id="submitManualBtn" class="btn btn-primary">✅ 提交</button></div>
     </div>
     <div class="card">
         <div class="section-title">📊 2. 接收进度</div>
         <div id="currentFingerprint" class="fingerprint-display" style="display:none;"><strong>文件指纹:</strong> <span id="fingerprintValue">未设置</span></div>
+        <div id="lastChunkInfo" class="fingerprint-display" style="display:none;"><strong>最近识别:</strong> <span id="lastChunkValue">无</span></div>
         <div id="status" class="status-message status-info">等待扫描</div>
         <div class="progress-section"><div class="progress-info"><span>进度: <span id="receivedCount">0</span>/<span id="totalCount">0</span></span><span id="percentage">0%</span></div><div class="progress-bar"><div id="progressFill" class="progress-fill"></div></div></div>
         <div id="chunksDisplay" class="chunks-grid"></div>
@@ -235,6 +244,8 @@
     let lastDecodedText = '';
     let lastScanTime = 0;
     let base45 = window.base45;
+    let availableCameras = [];
+    let currentCameraDeviceId = '';
 
     // 辅助函数
     function calculateCRC32(data) {
@@ -259,6 +270,8 @@
     // DOM 元素获取
     const videoElement = document.getElementById('videoElement');
     const cameraSelect = document.getElementById('cameraSelect');
+    const refreshCameraBtn = document.getElementById('refreshCameraBtn');
+    const cameraHelp = document.getElementById('cameraHelp');
     const startScanBtn = document.getElementById('startScanBtn');
     const scanBtnText = document.getElementById('scanBtnText');
     const scanStatus = document.getElementById('scanStatus');
@@ -284,6 +297,8 @@
     const floatingContainer = document.getElementById('floatingContainer');
     const currentFingerprintDiv = document.getElementById('currentFingerprint');
     const fingerprintValueSpan = document.getElementById('fingerprintValue');
+    const lastChunkInfoDiv = document.getElementById('lastChunkInfo');
+    const lastChunkValueSpan = document.getElementById('lastChunkValue');
     const { BrowserQRCodeReader } = ZXing;
 
     // 界面消息函数
@@ -301,6 +316,10 @@
         else if(type==='error') statusDiv.classList.add('status-error');
         else statusDiv.classList.add('status-info');
     }
+    function setCameraHelp(msg, isError=false){
+        cameraHelp.textContent = msg;
+        cameraHelp.classList.toggle('camera-help-error', isError);
+    }
 
     // 页面初始化
     document.addEventListener('DOMContentLoaded', async()=>{
@@ -311,46 +330,157 @@
         updateUI();
     });
 
-    async function initCameraList(){
+    function getCameraContextWarning(){
+        if(location.protocol === 'file:') return '当前是本地文件路径，摄像头权限或设备枚举可能异常；建议通过 http://localhost 访问。';
+        if(!window.isSecureContext) return '当前页面不是安全上下文，浏览器可能拒绝摄像头访问。';
+        return '';
+    }
+    function getCameraLabel(device, index){
+        return device.label || `摄像头 ${index + 1}`;
+    }
+    function findPreferredCamera(devices, requestedDeviceId){
+        if(requestedDeviceId){
+            const requested = devices.find(device => device.deviceId === requestedDeviceId);
+            if(requested) return requested;
+        }
+        const obsCamera = devices.find((device, index) => getCameraLabel(device, index).toLowerCase().includes('obs'));
+        return obsCamera || devices[0] || null;
+    }
+    async function requestCameraPermissionForLabels(){
+        if(!navigator.mediaDevices?.getUserMedia) throw new Error('当前浏览器不支持摄像头访问');
+        const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+        stream.getTracks().forEach(track => track.stop());
+    }
+    async function listVideoInputDevices(){
+        if(!navigator.mediaDevices) throw new Error('当前浏览器不支持摄像头访问');
         try{
-            let devices = [];
-            try{ devices = await BrowserQRCodeReader.listVideoInputDevices(); }
-            catch(e){ const native = await navigator.mediaDevices.enumerateDevices(); devices = native.filter(d=>d.kind==='videoinput'); }
-            cameraSelect.innerHTML = '<option value="">选择摄像头...</option>';
-            devices.forEach((d,idx)=>{ let opt = document.createElement('option'); opt.value = d.deviceId; opt.text = d.label || `摄像头 ${idx+1}`; cameraSelect.appendChild(opt); });
-            if(devices.length===0) scanStatus.textContent = '未找到摄像头';
-            else scanStatus.textContent = `找到 ${devices.length} 个摄像头`;
-        }catch(err){ console.error(err); scanStatus.textContent = '摄像头检测失败'; }
+            if(BrowserQRCodeReader?.listVideoInputDevices){
+                const zxingDevices = await BrowserQRCodeReader.listVideoInputDevices();
+                if(zxingDevices?.length) return zxingDevices;
+            }
+        }catch(err){
+            console.warn('ZXing 摄像头列表读取失败，改用浏览器原生枚举', err);
+        }
+        const nativeDevices = await navigator.mediaDevices.enumerateDevices();
+        return nativeDevices.filter(device => device.kind === 'videoinput');
+    }
+    function renderCameraOptions(devices, selectedDeviceId){
+        cameraSelect.innerHTML = '';
+        if(devices.length === 0){
+            const option = document.createElement('option');
+            option.value = '';
+            option.textContent = '未找到摄像头';
+            cameraSelect.appendChild(option);
+            cameraSelect.disabled = true;
+            startScanBtn.disabled = true;
+            return;
+        }
+        cameraSelect.disabled = false;
+        startScanBtn.disabled = false;
+        devices.forEach((device, index)=>{
+            const option = document.createElement('option');
+            option.value = device.deviceId;
+            option.textContent = getCameraLabel(device, index);
+            cameraSelect.appendChild(option);
+        });
+        cameraSelect.value = selectedDeviceId || devices[0].deviceId;
+    }
+    async function initCameraList(options={}){
+        try{
+            refreshCameraBtn.disabled = true;
+            if(options.requestPermission) await requestCameraPermissionForLabels();
+            const previousDeviceId = cameraSelect.value || currentCameraDeviceId;
+            const devices = await listVideoInputDevices();
+            const preferredCamera = findPreferredCamera(devices, previousDeviceId);
+            availableCameras = devices;
+            currentCameraDeviceId = preferredCamera?.deviceId || '';
+            renderCameraOptions(devices, currentCameraDeviceId);
+            if(devices.length===0){
+                scanStatus.textContent = '未找到摄像头';
+                setCameraHelp('未找到可用摄像头', true);
+                return;
+            }
+            const selectedIndex = devices.indexOf(preferredCamera);
+            const selectedLabel = getCameraLabel(preferredCamera, selectedIndex);
+            const contextWarning = getCameraContextWarning();
+            const hasObsCamera = devices.some((device, index) => getCameraLabel(device, index).toLowerCase().includes('obs'));
+            scanStatus.textContent = `找到 ${devices.length} 个摄像头`;
+            if(contextWarning) setCameraHelp(contextWarning, true);
+            else if(hasObsCamera) setCameraHelp(`已选择 ${selectedLabel}`);
+            else setCameraHelp(`已选择 ${selectedLabel}；未发现 OBS Virtual Camera，请先在 OBS 启动虚拟摄像头后点击刷新。`);
+        }catch(err){
+            console.error(err);
+            availableCameras = [];
+            scanStatus.textContent = '摄像头检测失败';
+            setCameraHelp(err.message || '摄像头检测失败', true);
+        }finally{
+            refreshCameraBtn.disabled = false;
+        }
     }
 
+    async function resolveSelectedCameraId(){
+        if(availableCameras.length === 0) await initCameraList({ requestPermission: true });
+        const selectedDeviceId = cameraSelect.value || currentCameraDeviceId;
+        const selectedCamera = findPreferredCamera(availableCameras, selectedDeviceId);
+        if(!selectedCamera?.deviceId) throw new Error('未找到可用摄像头');
+        cameraSelect.value = selectedCamera.deviceId;
+        currentCameraDeviceId = selectedCamera.deviceId;
+        return selectedCamera.deviceId;
+    }
+    async function startScanning(){
+        startScanBtn.disabled=true;
+        scanBtnText.textContent = '⏳ 启动...';
+        scanSection.classList.add('active');
+        await initCameraList({ requestPermission: true });
+        const deviceId = await resolveSelectedCameraId();
+        codeReader = new BrowserQRCodeReader({ tryHarder: true, formats: [ZXing.BarcodeFormat.QR_CODE] });
+        scanControls = await codeReader.decodeFromVideoDevice(deviceId, videoElement, (result, error, controls)=>{
+            if(result) handleScanResult(result.getText());
+            if(error && !error.message?.includes('NotFound') && !error.message?.includes('No QR')) console.log(error);
+            if(controls && !scanControls) scanControls = controls;
+        });
+        isScanning=true;
+        startScanBtn.disabled=false;
+        scanBtnText.textContent = '⏹️ 停止扫描';
+        const selectedOption = cameraSelect.options[cameraSelect.selectedIndex];
+        scanStatus.textContent = `扫描中: ${selectedOption?.textContent || '已选摄像头'}`;
+        showStatus('扫描已启动','success');
+        await initCameraList();
+        const refreshedOption = cameraSelect.options[cameraSelect.selectedIndex];
+        scanStatus.textContent = `扫描中: ${refreshedOption?.textContent || '已选摄像头'}`;
+    }
+    async function handleScanStartError(err){
+        console.error(err);
+        if(err.name==='NotAllowedError') showStatus('请允许摄像头权限','error');
+        else showStatus('启动失败: '+err.message,'error');
+        await stopScanning({ silent: true });
+        startScanBtn.disabled=false;
+        scanBtnText.textContent = '🚀 开始扫描';
+    }
     startScanBtn.addEventListener('click', async()=>{
         if(isProcessing) return;
         if(isScanning){ await stopScanning(); return; }
         isProcessing=true;
+        try{ await startScanning(); }
+        catch(err){ await handleScanStartError(err); }
+        finally { isProcessing=false; }
+    });
+    refreshCameraBtn.addEventListener('click', async()=>{
+        await initCameraList({ requestPermission: true });
+    });
+    cameraSelect.addEventListener('change', async()=>{
+        currentCameraDeviceId = cameraSelect.value;
+        if(!isScanning || isProcessing) return;
+        isProcessing = true;
         try{
-            startScanBtn.disabled=true;
-            scanBtnText.textContent = '⏳ 启动...';
-            scanSection.classList.add('active');
-            const deviceId = cameraSelect.value || undefined;
-            codeReader = new BrowserQRCodeReader({ tryHarder: true, formats: [ZXing.BarcodeFormat.QR_CODE] });
-            scanControls = await codeReader.decodeFromVideoDevice(deviceId, videoElement, (result, error, controls)=>{
-                if(result) handleScanResult(result.getText());
-                if(error && !error.message?.includes('NotFound') && !error.message?.includes('No QR')) console.log(error);
-                if(controls && !scanControls) scanControls = controls;
-            });
-            isScanning=true;
-            startScanBtn.disabled=false;
-            scanBtnText.textContent = '⏹️ 停止扫描';
-            scanStatus.textContent = '扫描中...';
-            showStatus('扫描已启动','success');
+            await stopScanning({ silent: true });
+            await startScanning();
+            showStatus('已切换摄像头','success');
         }catch(err){
-            console.error(err);
-            if(err.name==='NotAllowedError') showStatus('请允许摄像头权限','error');
-            else showStatus('启动失败: '+err.message,'error');
-            await stopScanning();
-            startScanBtn.disabled=false;
-            scanBtnText.textContent = '🚀 开始扫描';
-        } finally { isProcessing=false; }
+            await handleScanStartError(err);
+        }finally{
+            isProcessing = false;
+        }
     });
 
     function handleScanResult(decodedText){
@@ -362,7 +492,7 @@
         processChunkData(decodedText);
     }
 
-    async function stopScanning(){
+    async function stopScanning(options={}){
         isScanning=false;
         if(scanControls?.stop) scanControls.stop();
         if(codeReader?.reset) codeReader.reset();
@@ -374,7 +504,8 @@
         scanSection.classList.remove('active');
         scanBtnText.textContent = '🚀 开始扫描';
         startScanBtn.disabled=false;
-        showStatus('扫描已停止','info');
+        scanStatus.textContent = '就绪';
+        if(!options.silent) showStatus('扫描已停止','info');
     }
     closeScanBtn.addEventListener('click', stopScanning);
 
@@ -405,6 +536,8 @@
                 await store.setItem('totalDataChunks', totalDataChunks);
                 await store.setItem('receiveTime', new Date().toISOString());
                 receiveTimeSpan.textContent = new Date().toLocaleString();
+                lastChunkInfoDiv.style.display = 'block';
+                lastChunkValueSpan.textContent = `文件名分片，payload t=${chunk.t}`;
                 showFloatingMessage('📄 文件名分片接收成功');
                 showStatus(`文件名: ${receivedFileName}`, 'success');
             } else {
@@ -414,12 +547,15 @@
                 else if(chunk.f !== currentFileFingerprint){ showFloatingMessage('二维码不属于当前文件',true); return; }
                 const calcHash = calculateCRC32(chunk.d);
                 if(calcHash !== chunk.h.toLowerCase()){ showFloatingMessage(`分片 ${chunk.i+1} 校验失败`,true); return; }
-                if(receivedDataChunks.has(chunk.i)){ showFloatingMessage(`分片 ${chunk.i+1} 已存在`); return; }
+                lastChunkInfoDiv.style.display = 'block';
+                lastChunkValueSpan.textContent = `数据分片 ${chunk.i + 1}/${chunk.t}，payload i=${chunk.i}`;
+                if(receivedDataChunks.has(chunk.i)){ showFloatingMessage(`分片 ${chunk.i+1} 已存在`); showStatus(`分片 ${chunk.i+1}/${chunk.t} 已存在`, 'info'); return; }
                 if(totalDataChunks === 0) totalDataChunks = chunk.t;
                 receivedDataChunks.set(chunk.i, chunk);
                 const store = localforage.createInstance({ name: 'qrcode-filename-separate' });
                 await store.setItem(`dataChunk_${chunk.i}`, chunk);
                 showFloatingMessage(`✅ 数据分片 ${chunk.i+1}/${chunk.t}`);
+                showStatus(`收到分片 ${chunk.i+1}/${chunk.t}`, 'success');
             }
             updateUI();
             checkCompletion();
@@ -545,6 +681,8 @@
             receivedDataChunks.clear();
             fileNameData=null; totalDataChunks=0; currentFileFingerprint=null; receivedFileName=''; receivedFileSize=0;
             currentFingerprintDiv.style.display='none';
+            lastChunkInfoDiv.style.display='none';
+            lastChunkValueSpan.textContent='无';
             fileInfoDiv.style.display='none';
             downloadSection.classList.add('hidden');
             receiveTimeSpan.textContent='未知';
